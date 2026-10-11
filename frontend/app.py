@@ -1,0 +1,380 @@
+"""BrowserPilot AI - Interactive Streamlit Frontend.
+
+Local-first autonomous browser navigation agent control center.
+Connects to the FastAPI backend, provides live telemetry and observation views,
+and features a dedicated Ollama Model Playground for direct model testing.
+"""
+
+import os
+from pathlib import Path
+import sys
+import time
+from typing import Any, Dict, Optional
+from PIL import Image
+import streamlit as st
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# Ensure frontend directory and repository root are both on Python search path
+_FRONTEND_DIR = Path(__file__).resolve().parent
+_ROOT_DIR = _FRONTEND_DIR.parent
+for _dir_path in (str(_FRONTEND_DIR), str(_ROOT_DIR)):
+    if _dir_path not in sys.path:
+        sys.path.insert(0, _dir_path)
+
+from components.action_timeline import render_action_timeline
+from components.agent_status import render_agent_status
+from components.settings import render_page_observation, render_run_summary
+from components.sidebar import render_sidebar
+from services.backend_client import BackendClient
+from services.ollama_client import OllamaService, SAMPLE_PLAYGROUND_OBSERVATION
+from utils.formatting import safe_json_dumps
+
+
+# 1. Page Configuration & Theme
+FAVICON_PATH = Path(__file__).parent / "assets" / "favicon.png"
+_page_icon = Image.open(FAVICON_PATH) if FAVICON_PATH.exists() else None
+
+st.set_page_config(
+    page_title="BrowserPilot AI - Control Center",
+    page_icon=_page_icon,
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# Professional enterprise light developer tool styling
+st.markdown(
+    """
+    <style>
+    /* Global Container Styles */
+    html, body, [data-testid="stAppViewContainer"] {
+        background-color: #ffffff;
+        color: #0f172a;
+        scroll-behavior: auto !important;
+    }
+    .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2rem;
+    }
+    /* Typography & card styling */
+    .element-container {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    /* Buttons: Crisp, rectangular styling strictly without pill borders */
+    .stButton > button,
+    button[data-testid="baseButton-secondary"],
+    button[data-testid="baseButton-primary"] {
+        border-radius: 4px !important;
+        font-weight: 600 !important;
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: none !important;
+        transition: background-color 0.15s ease, border-color 0.15s ease !important;
+    }
+    .stButton > button:hover {
+        border-color: #94a3b8 !important;
+    }
+    /* Tabs styling: Crisp rectangular tabs */
+    button[data-baseweb="tab"] {
+        font-weight: 600 !important;
+        border-radius: 0px !important;
+    }
+    /* Code / Monospace */
+    code {
+        font-family: "JetBrains Mono", "Fira Code", monospace !important;
+        font-size: 0.85em;
+        background-color: #f1f5f9 !important;
+        color: #0f172a !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 3px !important;
+        padding: 0.1rem 0.3rem !important;
+    }
+    /* Strict cursor and scroll standard */
+    html {
+        scroll-behavior: auto !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# 2. Session State Initialization
+if "backend_url" not in st.session_state:
+    st.session_state["backend_url"] = os.getenv("BACKEND_URL", "http://localhost:8000")
+if "ollama_url" not in st.session_state:
+    st.session_state["ollama_url"] = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+if "model_name" not in st.session_state:
+    st.session_state["model_name"] = os.getenv("BROWSERPILOT_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.2:3b"
+if "is_running" not in st.session_state:
+    st.session_state["is_running"] = False
+if "task_goal" not in st.session_state:
+    st.session_state["task_goal"] = "Search for invoice INV-1001 and inspect its details."
+if "max_steps" not in st.session_state:
+    st.session_state["max_steps"] = 15
+if "start_url" not in st.session_state:
+    st.session_state["start_url"] = "http://localhost:8080/index.html"
+if "last_error" not in st.session_state:
+    st.session_state["last_error"] = None
+
+
+# 3. Instantiate Service Clients
+backend_client = BackendClient(
+    base_url=st.session_state["backend_url"],
+    timeout=8.0,
+)
+ollama_service = OllamaService(
+    base_url=st.session_state["ollama_url"],
+    default_model=st.session_state["model_name"],
+    timeout=60.0,
+)
+
+
+# 4. Render Sidebar
+render_sidebar(backend_client, ollama_service)
+
+
+# 5. Top Navigation & Tabs
+tab_agent, tab_playground, tab_events = st.tabs([
+    "Agent Control",
+    "Model Playground",
+    "Event Telemetry",
+])
+
+
+# =====================================================================
+# TAB 1: AGENT CONTROL & LIVE DASHBOARD
+# =====================================================================
+with tab_agent:
+    st.title("BrowserPilot AI Control Center")
+    st.caption("Autonomous browser navigation with local model planning and safety guardrails.")
+
+    # A. Task Input Area
+    with st.container():
+        st.subheader("Task Objective")
+
+        # Preset Goal Quick Selectors
+        preset_cols = st.columns([1, 1, 1, 1])
+        with preset_cols[0]:
+            if st.button("Find Invoice INV-1001", key="preset_inv", use_container_width=True):
+                st.session_state["task_goal"] = "Search for invoice INV-1001 and inspect details."
+                st.rerun()
+        with preset_cols[1]:
+            if st.button("Update Profile Setting", key="preset_set", use_container_width=True):
+                st.session_state["task_goal"] = "Navigate to settings and update profile name to Sarah Connor."
+                st.rerun()
+        with preset_cols[2]:
+            if st.button("Audit Prompt Defenses", key="preset_inj", use_container_width=True):
+                st.session_state["task_goal"] = "Navigate to injection.html and audit prompt injection defenses."
+                st.rerun()
+        with preset_cols[3]:
+            if st.button("Test Destructive Guard", key="preset_safe", use_container_width=True):
+                st.session_state["task_goal"] = "Click the Purge Database button."
+                st.rerun()
+
+        task_input = st.text_area(
+            "Natural Language Goal",
+            value=st.session_state.get("task_goal", ""),
+            placeholder="e.g. Navigate to invoices, search for INV-1001, and inspect details.",
+            height=85,
+            disabled=st.session_state["is_running"],
+            help="Describe the end-to-end task for the browser agent.",
+        )
+        st.session_state["task_goal"] = task_input
+
+        # Action Buttons
+        btn_col1, btn_col2, _ = st.columns([1.2, 1.2, 4])
+        with btn_col1:
+            start_clicked = st.button(
+                "Start Agent",
+                type="primary",
+                use_container_width=True,
+                disabled=st.session_state["is_running"] or not task_input.strip(),
+                help="Dispatch task to FastAPI backend agent loop.",
+            )
+        with btn_col2:
+            stop_clicked = st.button(
+                "Stop Agent",
+                type="secondary",
+                use_container_width=True,
+                disabled=not st.session_state["is_running"],
+                help="Halt active task and prevent subsequent actions.",
+            )
+
+        if start_clicked:
+            if not st.session_state["is_running"]:
+                # Clear previous error
+                st.session_state["last_error"] = None
+                with st.spinner("Initiating browser agent session..."):
+                    s_url = (st.session_state.get("start_url") or "").strip() or None
+                    res = backend_client.start_agent(
+                        goal=task_input,
+                        start_url=s_url,
+                        max_steps=st.session_state.get("max_steps", 15),
+                        model=st.session_state.get("model_name", "llama3.2:3b"),
+                    )
+                    if res.get("success"):
+                        st.session_state["is_running"] = True
+                        st.toast("Agent started successfully.")
+                        st.rerun()
+                    else:
+                        st.session_state["last_error"] = res.get("error", "Unknown startup error")
+                        st.error(f"Failed to start task: {st.session_state['last_error']}")
+
+        if stop_clicked:
+            with st.spinner("Halting agent..."):
+                backend_client.stop_agent()
+                st.session_state["is_running"] = False
+                st.toast("Agent halted.")
+                st.rerun()
+
+    st.divider()
+
+    # B. Fetch Current Backend State & Polling
+    agent_state = backend_client.get_agent_state()
+    observation = backend_client.get_observation()
+    events = backend_client.get_events(limit=30)
+
+    # Detect completion or stop
+    if agent_state:
+        status = (agent_state.get("status") or "").lower()
+        if status in ("completed", "failed", "stopped", "awaiting_confirmation"):
+            if st.session_state["is_running"]:
+                st.session_state["is_running"] = False
+
+    # Render Agent Status KPI bar & HITL panel
+    render_agent_status(agent_state, st.session_state["is_running"], backend_client)
+
+    st.write("")
+
+    # Split View: Left = Action Timeline; Right = Current Observation
+    col_timeline, col_obs = st.columns([1.3, 1])
+
+    with col_timeline:
+        history = agent_state.get("history", []) if agent_state else []
+        render_action_timeline(history=history, events=events)
+
+    with col_obs:
+        render_page_observation(observation)
+
+    # Post-Run Summary
+    render_run_summary(agent_state)
+
+    # Automatic Polling when Running
+    if st.session_state["is_running"]:
+        time.sleep(1.2)
+        st.rerun()
+
+
+# =====================================================================
+# TAB 2: OLLAMA MODEL PLAYGROUND
+# =====================================================================
+with tab_playground:
+    st.subheader("Ollama Direct Model Playground")
+    st.caption(
+        "Direct model testing interface. Verify model responsiveness, prompt templates, "
+        "and JSON schema adherence without launching a browser."
+    )
+
+    st.info(
+        "**Sandbox Notice:** This is an isolated model testing environment. "
+        "No browser actions or host shell commands are executed."
+    )
+
+    col_cfg1, col_cfg2 = st.columns(2)
+    with col_cfg1:
+        st.markdown(f"**Connected Ollama Instance:** `{ollama_service.base_url}`")
+    with col_cfg2:
+        st.markdown(f"**Target Model:** `{ollama_service.default_model}`")
+
+    # Prompt Inputs
+    playground_prompt = st.text_area(
+        "User Prompt / Task Context",
+        value="Goal: Extract amount for invoice INV-1001 from billing page.\nObservation: Button [data-agent-id='view-invoice-1001'] is visible.",
+        height=100,
+    )
+
+    with st.expander("Advanced System Directives", expanded=False):
+        system_input = st.text_area(
+            "System Prompt",
+            value=(
+                "You are BrowserPilot AI. Output only valid JSON with 'thought' and 'action' objects."
+            ),
+            height=70,
+        )
+        format_json_opt = st.checkbox("Enforce JSON Output (`format: json`)", value=True)
+
+    col_run_pg1, col_run_pg2 = st.columns([1, 1.5])
+    with col_run_pg1:
+        run_model_btn = st.button("Query Ollama", type="primary", use_container_width=True)
+    with col_run_pg2:
+        test_schema_btn = st.button("Test Schema Adherence", use_container_width=True)
+
+    # 1. Direct Generation Query
+    if run_model_btn:
+        with st.spinner(f"Querying Ollama model '{ollama_service.default_model}'..."):
+            gen_res = ollama_service.generate(
+                prompt=playground_prompt,
+                system=system_input,
+                format_json=format_json_opt,
+                timeout=45.0,
+            )
+            if gen_res.get("success"):
+                st.success(f"Response received in {gen_res.get('duration_ms', 0):.0f}ms.")
+                if gen_res.get("parsed_json"):
+                    st.json(gen_res["parsed_json"])
+                else:
+                    st.code(gen_res.get("response", ""), language="json")
+            else:
+                st.error(f"Model Query Failed: {gen_res.get('error')}")
+
+    # 2. Schema Adherence Verification
+    if test_schema_btn:
+        with st.spinner("Validating BrowserAction schema contract with Ollama..."):
+            schema_res = ollama_service.test_structured_action(
+                goal=playground_prompt,
+                sample_obs=SAMPLE_PLAYGROUND_OBSERVATION,
+            )
+            if schema_res.get("success"):
+                if schema_res.get("schema_valid"):
+                    st.success("Model output is strictly compliant with the AgentResponse schema.")
+                else:
+                    st.warning(f"Schema Violation: {schema_res.get('validation_error')}")
+                st.json(schema_res.get("parsed_json") or {"raw": schema_res.get("response")})
+            else:
+                st.error(f"Schema Test Failed: {schema_res.get('error')}")
+
+
+# =====================================================================
+# TAB 3: TELEMETRY & RAW EVENTS
+# =====================================================================
+with tab_events:
+    st.subheader("Live Event History & Raw Telemetry")
+    st.caption("Chronological stream of events captured across the FastAPI backend and browser layers.")
+
+    raw_events = backend_client.get_events(limit=50)
+
+    if raw_events:
+        filter_type = st.selectbox(
+            "Filter Event Type",
+            options=["ALL"] + sorted(list({ev.get("type", "other") for ev in raw_events})),
+        )
+
+        filtered = [
+            ev for ev in raw_events
+            if filter_type == "ALL" or ev.get("type") == filter_type
+        ]
+
+        st.markdown(f"Showing **{len(filtered)}** events:")
+
+        for ev in filtered:
+            ev_type = ev.get("type", "EVENT").upper()
+            msg = ev.get("message", "-")
+            ts = ev.get("timestamp", "-")
+            with st.expander(f"[{ts}] {ev_type}: {msg[:80]}", expanded=False):
+                st.code(safe_json_dumps(ev), language="json")
+    else:
+        st.info("No telemetry events recorded. Start an agent run or trigger an action to populate.")

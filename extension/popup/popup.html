@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Klick AI - Custom Tasks</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="popup-header">
+      <div class="brand">
+        <div class="brand-badge">K</div>
+        <div class="brand-info">
+          <h2>Klick</h2>
+          <span>Custom Task Assistant</span>
+        </div>
+      </div>
+      <div class="status-wrap">
+        <div class="status-pill" id="backend-status" title="Local Backend Status">
+          <span class="status-dot" id="backend-dot"></span>
+          <span class="status-text" id="backend-text">Checking...</span>
+        </div>
+        <a href="http://127.0.0.1:8000/dashboard/index.html" target="_blank" class="icon-btn" title="Open Full Dashboard">↗</a>
+      </div>
+    </header>
+
+    <!-- Current Tab Banner -->
+    <div class="current-tab-box">
+      <span class="tab-label">ACTIVE TAB</span>
+      <div class="tab-title" id="tab-title">Detecting current tab...</div>
+      <div class="tab-url" id="tab-url"></div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+      <button class="nav-tab active" data-tab="tab-tasks">Tasks & Presets</button>
+      <button class="nav-tab" data-tab="tab-builder">Task Builder</button>
+      <button class="nav-tab" data-tab="tab-monitor">Live Monitor</button>
+    </nav>
+
+    <!-- TAB 1: Tasks & Presets -->
+    <section class="tab-content active" id="tab-tasks">
+      <!-- Quick Prompt Input -->
+      <div class="quick-input-card">
+        <label for="quick-goal">Run Custom Goal on this Page</label>
+        <div class="input-row">
+          <input type="text" id="quick-goal" placeholder="e.g. Find contact email and pricing table..." />
+          <button id="btn-quick-run" class="btn btn-primary">Run</button>
+        </div>
+      </div>
+
+      <!-- User Saved Custom Tasks -->
+      <div class="section-title-row">
+        <h3>My Custom Tasks</h3>
+        <span class="badge" id="custom-task-count">0</span>
+      </div>
+      <div class="task-list" id="user-custom-tasks">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Built-in Task Recipes -->
+      <div class="section-title-row">
+        <h3>Task Presets</h3>
+        <span class="badge">6</span>
+      </div>
+      <div class="preset-grid">
+        <div class="preset-card" data-preset="summarize">
+          <div class="preset-icon">📝</div>
+          <div class="preset-info">
+            <h4>Summarize Article</h4>
+            <p>Extract key takeaways & main article</p>
+          </div>
+          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
+        </div>
+
+        <div class="preset-card" data-preset="scrape">
+          <div class="preset-icon">📊</div>
+          <div class="preset-info">
+            <h4>Extract Tables & Data</h4>
+            <p>Parse tables and lists to structured JSON</p>
+          </div>
+          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
+        </div>
+
+        <div class="preset-card" data-preset="forms">
+          <div class="preset-icon">✍️</div>
+          <div class="preset-info">
+            <h4>Fill Form Fields</h4>
+            <p>Identify input fields and complete form</p>
+          </div>
+          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
+        </div>
+
+        <div class="preset-card" data-preset="pricing">
+          <div class="preset-icon">🏷️</div>
+          <div class="preset-info">
+            <h4>Find Pricing Plans</h4>
+            <p>Locate tier pricing & discount details</p>
+          </div>
+          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
+        </div>
+
+        <div class="preset-card" data-preset="links">
+          <div class="preset-icon">🔗</div>
+          <div class="preset-info">
+            <h4>Collect All Links</h4>
+            <p>Audit outbound links and resources</p>
+          </div>
+          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
+        </div>
+
+        <div class="preset-card" data-preset="audit">
+          <div class="preset-icon">🛡️</div>
+          <div class="preset-info">
+            <h4>Element & QA Audit</h4>
+            <p>Verify buttons, inputs, and layout</p>
+          </div>
+          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: Custom Task Builder -->
+    <section class="tab-content" id="tab-builder">
+      <div class="card form-card">
+        <h3>Create New Custom Task</h3>
+        <p class="form-hint">Define a reusable autonomous task macro you can run with 1 click.</p>
+
+        <div class="form-group">
+          <label for="task-name">Task Name</label>
+          <input type="text" id="task-name" placeholder="e.g. Export Invoice Summary, Check Stock" />
+        </div>
+
+        <div class="form-group">
+          <label for="task-goal">Goal Prompt Template</label>
+          <textarea id="task-goal" rows="3" placeholder="e.g. Find products with discount > 20%, click view details, and extract the price..."></textarea>
+          <span class="hint-tokens">Tokens: <code>{{current_url}}</code>, <code>{{current_title}}</code></span>
+        </div>
+
+        <div class="form-group">
+          <label for="task-url-mode">Target URL</label>
+          <select id="task-url-mode">
+            <option value="active">Active Tab URL</option>
+            <option value="custom">Specific Custom URL</option>
+          </select>
+        </div>
+
+        <div class="form-group hidden" id="group-custom-url">
+          <label for="task-custom-url">Custom URL</label>
+          <input type="url" id="task-custom-url" placeholder="https://example.com" />
+        </div>
+
+        <div class="form-group">
+          <label for="task-max-steps">Max Execution Steps: <span id="steps-val">10</span></label>
+          <input type="range" id="task-max-steps" min="3" max="25" value="10" />
+        </div>
+
+        <button id="btn-save-task" class="btn btn-primary btn-block">Save Custom Task</button>
+      </div>
+    </section>
+
+    <!-- TAB 3: Live Monitor -->
+    <section class="tab-content" id="tab-monitor">
+      <div class="monitor-card">
+        <div class="monitor-header">
+          <span class="monitor-badge" id="monitor-status">IDLE</span>
+          <span class="monitor-step" id="monitor-step">Step 0 / 0</span>
+        </div>
+
+        <div class="monitor-goal-box">
+          <span class="mini-label">ACTIVE GOAL</span>
+          <p id="monitor-goal">No active task running.</p>
+        </div>
+
+        <div class="monitor-log-box">
+          <span class="mini-label">LATEST AGENT ACTION</span>
+          <div class="log-entry" id="monitor-action">Agent is idle.</div>
+        </div>
+
+        <div class="monitor-actions">
+          <button id="btn-stop-agent" class="btn btn-danger btn-sm" disabled>🛑 Stop Agent</button>
+          <button id="btn-reload-agent" class="btn btn-secondary btn-sm">🔄 Reset Session</button>
+          <button id="btn-view-dashboard" class="btn btn-outline btn-sm">↗ View Dashboard</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="popup-footer">
+      <span>Klick AI • Local Agent v0.1.0</span>
+      <span id="footer-agent-status">Ready</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

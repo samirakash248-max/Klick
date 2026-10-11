@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Klick AI - Live Control Panel</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="dashboard-container">
+    <!-- Top Bar Navigation -->
+    <header class="dashboard-header">
+      <div class="brand">
+        <div class="brand-logo">K</div>
+        <div class="brand-text">
+          <h1>Klick AI</h1>
+          <span class="brand-subtitle">Autonomous Browser Control Plane</span>
+        </div>
+      </div>
+
+      <div class="header-status-group">
+        <!-- Backend Connection Indicator -->
+        <div class="status-indicator" id="backend-status-wrap" title="FastAPI Backend Connectivity">
+          <span class="status-dot dot-checking" id="backend-status-dot"></span>
+          <span class="status-label" id="backend-status-text">CONNECTING...</span>
+        </div>
+
+        <!-- Reload / Reset Session Button -->
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-reload-browser" onclick="reloadBrowserSession()" title="Cleanly reset browser session and clear stop locks" style="padding: 4px 10px; font-size: 12px; cursor: pointer;">
+          🔄 Reload Session
+        </button>
+
+        <!-- Agent Execution Lifecycle Badge -->
+        <div class="badge status-idle" id="agent-status-badge">
+          <span class="status-dot"></span>
+          <span id="agent-status-text">IDLE</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main 2-Column Grid -->
+    <main class="dashboard-grid">
+      <!-- LEFT COLUMN: Control Panel & Browser State -->
+      <div class="col-left">
+        <!-- 1. TASK CONTROL PANEL -->
+        <section class="card" id="panel-task-controls">
+          <div class="card-header">
+            <h2 class="card-title">Task & Action Controller</h2>
+            <span class="card-badge" id="execution-mode-badge">Demo Presets</span>
+          </div>
+
+          <!-- Execution Mode Selector -->
+          <div class="form-group">
+            <label>Execution Mode</label>
+            <div class="mode-selector-tabs">
+              <button type="button" class="mode-tab active" id="tab-mode-workflow" onclick="setExecutionMode('workflow')">
+                ⚡ Demo Presets
+              </button>
+              <button type="button" class="mode-tab" id="tab-mode-autonomous" onclick="setExecutionMode('autonomous')">
+                🤖 Autonomous Agent (AI)
+              </button>
+              <button type="button" class="mode-tab" id="tab-mode-manual" onclick="setExecutionMode('manual')">
+                🛠️ Custom Action
+              </button>
+            </div>
+          </div>
+
+          <!-- Natural Language Goal Input -->
+          <div class="form-group">
+            <label for="goal-input">Task / Objective Description</label>
+            <textarea id="goal-input" rows="2" placeholder="e.g. Open invoices, search for INV-1001, and inspect details.">Verify invoice 1001 details on mock site</textarea>
+          </div>
+
+          <!-- Quick Workflow Presets Container -->
+          <div class="form-group" id="presets-container">
+            <label>Demo Scenarios & Action Presets</label>
+            <div class="presets-toolbar">
+              <button type="button" class="preset-btn active" id="preset-workflow" onclick="selectPreset('full-workflow')">
+                ⚡ Scenario 1: Find Invoice
+              </button>
+              <button type="button" class="preset-btn" id="preset-settings" onclick="selectPreset('scenario-2-settings')">
+                ⚙️ Scenario 2: Update Setting
+              </button>
+              <button type="button" class="preset-btn" id="preset-stop" onclick="selectPreset('scenario-3-stop')">
+                ⏹️ Scenario 3: Multi-Action (Stop Demo)
+              </button>
+              <button type="button" class="preset-btn" id="preset-injection" onclick="selectPreset('safety-injection')">
+                🛡️ Injection Defense Demo
+              </button>
+              <button type="button" class="preset-btn" onclick="selectPreset('nav-invoices')">
+                📂 Open Invoices
+              </button>
+              <button type="button" class="preset-btn" onclick="selectPreset('type-search')">
+                🔍 Search INV-1001
+              </button>
+              <button type="button" class="preset-btn" onclick="selectPreset('click-view')">
+                👁️ View 1001
+              </button>
+              <button type="button" class="preset-btn" onclick="selectPreset('scroll-down')">
+                📜 Scroll Page
+              </button>
+              <button type="button" class="preset-btn preset-danger" onclick="selectPreset('invalid-target')">
+                ⚠️ Error Demo (Invalid Target)
+              </button>
+            </div>
+          </div>
+
+          <!-- Autonomous AI Reasoning Monitor (Active during Autonomous runs) -->
+          <div class="ai-thought-panel" id="ai-thought-panel" style="display: none;">
+            <div class="thought-header">
+              <span class="thought-badge">🧠 Autonomous Model Stream</span>
+              <span class="thought-model-tag" id="thought-model-tag">Ollama LLM</span>
+            </div>
+            <div class="thought-item">
+              <span class="thought-label">Reflection:</span>
+              <p class="thought-text" id="thought-reflection">-</p>
+            </div>
+            <div class="thought-item">
+              <span class="thought-label">Reasoning & Action:</span>
+              <p class="thought-text" id="thought-action">-</p>
+            </div>
+          </div>
+
+          <!-- Action Control Buttons -->
+          <div class="action-btn-group">
+            <button type="button" class="btn btn-primary" id="btn-run" onclick="runCurrentTask()">
+              <span class="btn-icon">▶</span>
+              <span id="btn-run-text">Run Task</span>
+            </button>
+            <button type="button" class="btn btn-danger" id="btn-stop" onclick="stopCurrentTask()">
+              <span class="btn-icon">⏹</span>
+              <span>Stop Agent</span>
+            </button>
+            <button type="button" class="btn btn-secondary" id="btn-resume" onclick="resumeAgent()" style="display: none;">
+              <span class="btn-icon">↺</span>
+              <span id="btn-resume-text">Enable Actions / Resume</span>
+            </button>
+          </div>
+
+          <!-- Manual Single-Action Executor (Custom overrides) -->
+          <details class="custom-action-drawer">
+            <summary>Custom Atomic Action Builder</summary>
+            <div class="custom-action-form">
+              <div class="form-row">
+                <div class="form-group" style="flex: 1;">
+                  <label for="custom-action-type">Action</label>
+                  <select id="custom-action-type" class="form-select">
+                    <option value="click">click</option>
+                    <option value="type">type</option>
+                    <option value="scroll">scroll</option>
+                    <option value="navigate">navigate</option>
+                    <option value="wait">wait</option>
+                  </select>
+                </div>
+                <div class="form-group" style="flex: 2;">
+                  <label for="custom-action-target">Target (data-agent-id)</label>
+                  <input type="text" id="custom-action-target" placeholder="e.g. view-invoice-1001" value="view-invoice-1001" />
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="custom-action-value">Text / URL / Delta Value</label>
+                <input type="text" id="custom-action-value" placeholder="e.g. INV-1001 or URL" />
+              </div>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="executeCustomSingleAction()">
+                Execute Single Action
+              </button>
+            </div>
+          </details>
+        </section>
+
+        <!-- 2. BROWSER STATUS & OBSERVATION -->
+        <section class="card" id="panel-browser-status">
+          <div class="card-header">
+            <h2 class="card-title">Browser State & Observation</h2>
+            <button type="button" class="btn-icon-subtle" onclick="refreshObservation()" title="Refresh observation">
+              ↻ Refresh
+            </button>
+          </div>
+
+          <div class="browser-meta-grid">
+            <!-- Active Page Title -->
+            <div class="meta-field">
+              <span class="meta-label">PAGE TITLE</span>
+              <div class="meta-value" id="browser-title">Checking page...</div>
+            </div>
+
+            <!-- Active Page URL -->
+            <div class="meta-field">
+              <span class="meta-label">CURRENT URL</span>
+              <div class="meta-value font-mono" id="browser-url">Loading...</div>
+            </div>
+
+            <!-- Active Action Target Highlight -->
+            <div class="meta-field">
+              <span class="meta-label">LAST ACTION TARGET</span>
+              <div class="meta-target-highlight" id="active-target-badge">
+                <span class="target-icon">🎯</span>
+                <span id="active-target-text">None</span>
+              </div>
+            </div>
+
+            <!-- Detected Interactive Elements Count -->
+            <div class="meta-field">
+              <span class="meta-label">DETECTED DOM ELEMENTS</span>
+              <div class="meta-value">
+                <span class="element-count-badge" id="elements-count">0 Elements</span>
+                <span style="font-size: 0.8rem; color: var(--text-muted); margin-left: 0.5rem;" id="elements-summary">via Playwright Observer</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Observed Elements Tags Cloud -->
+          <div class="observed-elements-section">
+            <span class="meta-label">VISIBLE INTERACTIVE AGENT IDS</span>
+            <div class="agent-id-tag-cloud" id="agent-tags-container">
+              <span class="tag-placeholder">Loading interactive elements...</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- RIGHT COLUMN: Live Activity Feed -->
+      <div class="col-right">
+        <section class="card" id="panel-activity-feed" style="height: 100%; display: flex; flex-direction: column;">
+          <div class="card-header">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <h2 class="card-title">Live Activity Feed</h2>
+              <span class="event-counter" id="event-count-badge">0 events</span>
+            </div>
+            <div class="feed-controls">
+              <label class="autoscroll-toggle">
+                <input type="checkbox" id="autoscroll-checkbox" checked>
+                <span>Auto-scroll</span>
+              </label>
+              <button type="button" class="btn-clear" onclick="clearActivityFeed()">Clear</button>
+            </div>
+          </div>
+
+          <!-- Activity Feed Container -->
+          <div class="activity-feed" id="activity-feed-list">
+            <!-- Initial placeholder item -->
+            <div class="feed-empty-state" id="feed-empty-state">
+              <div class="empty-icon">📡</div>
+              <p>Awaiting browser events...</p>
+              <span style="font-size: 0.8rem; color: var(--text-muted);">Real-time action executions will appear here.</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
