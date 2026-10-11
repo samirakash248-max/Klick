@@ -1,6 +1,8 @@
 /**
  * Klick AI - Content Script (In-Tab Execution Engine)
  * Runs autonomous tasks directly on the active browser tab without opening extra Chrome windows.
+ * Optimized with fast token-pruned DOM extraction, cookie banner auto-clear,
+ * and robust keyboard / search / media link interaction.
  */
 
 const BACKEND_BASE = "http://127.0.0.1:8000";
@@ -19,7 +21,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: "Task is already executing on this tab." });
       return true;
     }
-    startInTabTask(message.goal, message.maxSteps || 10);
+    startInTabTask(message.goal, message.maxSteps || 10, message.model || "llama3.2:3b");
     sendResponse({ success: true, message: "Task started directly in active tab." });
   } else if (message.action === "stop_task") {
     stopRequested = true;
@@ -31,15 +33,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // =========================================================================
+// Cookie / Consent Banner Auto-Dismissal
+// =========================================================================
+
+function dismissConsentBanners() {
+  try {
+    const buttons = Array.from(document.querySelectorAll("button, [role='button'], a"));
+    for (const btn of buttons) {
+      const text = (btn.innerText || btn.getAttribute("aria-label") || "").trim().toLowerCase();
+      if (
+        text === "accept all" ||
+        text === "i agree" ||
+        text === "accept" ||
+        text === "agree to all" ||
+        text.includes("before you continue") ||
+        text.includes("reject all")
+      ) {
+        btn.click();
+        return true;
+      }
+    }
+  } catch (e) {}
+  return false;
+}
+
+// =========================================================================
 // In-Tab Autonomous Execution Loop
 // =========================================================================
 
-async function startInTabTask(goal, maxSteps) {
+async function startInTabTask(goal, maxSteps, model = "llama3.2:3b") {
   isTaskRunning = true;
   stopRequested = false;
   const runId = "ext-" + Date.now();
 
-  createHud(goal, maxSteps);
+  createHud(goal, maxSteps, model);
 
   try {
     // Notify backend to initialize state
@@ -49,7 +76,8 @@ async function startInTabTask(goal, maxSteps) {
       body: JSON.stringify({
         goal: goal,
         start_url: window.location.href,
-        max_steps: maxSteps
+        max_steps: maxSteps,
+        model: model
       })
     });
 
@@ -60,7 +88,10 @@ async function startInTabTask(goal, maxSteps) {
       currentStep++;
       updateHud(currentStep, maxSteps, "Observing tab state & reasoning next action...", null);
 
-      // 1. Capture live page observation
+      // Dismiss cookie banners before observation
+      dismissConsentBanners();
+
+      // 1. Capture live page observation (token-optimized)
       const observation = observeDOM();
 
       // 2. Query backend cognitive step
@@ -73,7 +104,8 @@ async function startInTabTask(goal, maxSteps) {
           step: currentStep,
           max_steps: maxSteps,
           observation: observation,
-          last_result: lastResult
+          last_result: lastResult,
+          model: model
         })
       });
 
@@ -105,7 +137,7 @@ async function startInTabTask(goal, maxSteps) {
 
       // 4. Visually execute action on the active tab
       lastResult = await executeDomAction(action);
-      await sleep(600);
+      await sleep(250);
 
       if (stepData.is_terminal) {
         updateHud(currentStep, maxSteps, `✓ Task completed: ${stepData.final_output || "Done"}`, null, true);
@@ -125,16 +157,40 @@ async function startInTabTask(goal, maxSteps) {
 }
 
 // =========================================================================
-// DOM Observation Engine
+// Token-Optimized DOM Observation Engine
 // =========================================================================
 
 function observeDOM() {
-  const selectorQuery = 'button, a[href], input, select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="tab"], [data-agent-id]';
-  const candidates = Array.from(document.querySelectorAll(selectorQuery));
-  const elements = [];
+  const isYouTube = window.location.hostname.includes("youtube.com");
+  const isGoogle = window.location.hostname.includes("google.com");
 
-  for (let i = 0; i < candidates.length; i++) {
-    const el = candidates[i];
+  // Tag YouTube search box & primary video titles if on YouTube
+  if (isYouTube) {
+    const searchInput = document.querySelector("input#search, input[name='search_query'], ytd-searchbox input");
+    if (searchInput && !searchInput.getAttribute("data-agent-id")) {
+      searchInput.setAttribute("data-agent-id", "id-search");
+    }
+    const searchBtn = document.querySelector("button#search-icon-legacy, ytd-searchbox button");
+    if (searchBtn && !searchBtn.getAttribute("data-agent-id")) {
+      searchBtn.setAttribute("data-agent-id", "id-search-button");
+    }
+    const firstVideo = document.querySelector("a#video-title, ytd-video-renderer a#video-title, a[href*='/watch?v=']");
+    if (firstVideo && !firstVideo.getAttribute("data-agent-id")) {
+      firstVideo.setAttribute("data-agent-id", "id-video-title");
+    }
+  } else if (isGoogle) {
+    const searchBox = document.querySelector("textarea[name='q'], input[name='q']");
+    if (searchBox && !searchBox.getAttribute("data-agent-id")) {
+      searchBox.setAttribute("data-agent-id", "id-search");
+    }
+  }
+
+  const selectorQuery = 'button, a[href], input, select, textarea, [role="button"], [role="link"], [data-agent-id]';
+  const rawCandidates = Array.from(document.querySelectorAll(selectorQuery));
+  const candidateElements = [];
+
+  for (let i = 0; i < rawCandidates.length; i++) {
+    const el = rawCandidates[i];
 
     // Check visibility
     const rect = el.getBoundingClientRect();
@@ -145,40 +201,55 @@ function observeDOM() {
     const tag = el.tagName.toLowerCase();
     let agentId = el.getAttribute("data-agent-id");
     if (!agentId) {
-      agentId = el.id ? `id-${el.id}` : `elem-${elements.length}`;
+      agentId = el.id ? `id-${el.id}` : `elem-${candidateElements.length}`;
       try {
         el.setAttribute("data-agent-id", agentId);
       } catch (e) {}
     }
 
-    const text = (el.innerText || el.value || el.placeholder || el.getAttribute("aria-label") || el.getAttribute("title") || "").trim().slice(0, 80);
+    const text = (el.innerText || el.value || el.placeholder || el.getAttribute("aria-label") || el.getAttribute("title") || "").trim().slice(0, 70);
     const role = el.getAttribute("role") || tag;
+    const href = el.getAttribute("href") || null;
 
-    elements.push({
+    candidateElements.push({
       tag_name: tag,
       selector: `[data-agent-id="${agentId}"]`,
       id: el.id || null,
       text: text,
       role: role,
+      href: href,
       data_agent_id: agentId,
       is_visible: true
     });
-
-    if (elements.length >= 60) break; // Limit elements for token efficiency
   }
 
-  // Summary
-  const domSummary = elements
-    .map(e => `${e.tag_name}#${e.data_agent_id} "${e.text}"`)
-    .join(" | ");
+  // Prioritize controls: inputs/search first, then buttons, then video titles, then other links
+  candidateElements.sort((a, b) => {
+    const rank = el => {
+      const label = `${el.data_agent_id} ${el.text} ${el.tag_name}`.toLowerCase();
+      if (el.tag_name === "input" || el.tag_name === "textarea" || label.includes("search")) return 0;
+      if (label.includes("video-title") || (el.href && el.href.includes("/watch?v="))) return 1;
+      if (el.tag_name === "button" || el.role === "button") return 2;
+      if (el.tag_name === "a" && el.text) return 3;
+      return 4;
+    };
+    return rank(a) - rank(b);
+  });
 
-  const snippet = (document.body ? document.body.innerText : "").slice(0, 1500);
+  // Limit to top 25 actionable candidates to match backend observer token optimization
+  const prunedElements = candidateElements.slice(0, 25);
+
+  const domSummary = prunedElements
+    .map((e, idx) => `[${idx}] <${e.tag_name}> '${e.text || e.data_agent_id}' -> selector: \`${e.selector}\``)
+    .join("\n");
+
+  const snippet = (document.body ? document.body.innerText.slice(0, 500) : "").trim();
 
   return {
     url: window.location.href,
     title: document.title,
     dom_summary: domSummary,
-    interactive_elements: elements,
+    interactive_elements: prunedElements,
     page_text_snippet: snippet
   };
 }
@@ -197,40 +268,96 @@ async function executeDomAction(action) {
       return { success: false, error: `Element '${target}' not found on page` };
     }
 
-    // Visual pulse & scroll
     highlightElement(el);
     el.scrollIntoView({ behavior: "smooth", block: "center" });
-    await sleep(350);
+    await sleep(100);
 
-    // Trigger click
+    // Trigger click with full pointer sequence
     try {
+      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+      el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
       el.click();
     } catch {
-      el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      el.click();
     }
+
+    // If target is video link on YouTube and hasn't navigated after 300ms, navigate directly
+    if (el.tagName.toLowerCase() === "a" && el.href && (el.href.includes("/watch?v=") || el.href.includes("/shorts/"))) {
+      setTimeout(() => {
+        if (!window.location.href.includes("/watch") && !window.location.href.includes("/shorts")) {
+          window.location.href = el.href;
+        }
+      }, 350);
+    }
+
     return { success: true, message: `Clicked element '${target}'` };
   } else if (actType === "type") {
-    const el = resolveTargetElement(target);
+    const el = resolveTargetElement(target) || document.querySelector("input#search, input[name='search_query'], textarea[name='q'], input[type='text'], input");
     if (!el) {
-      return { success: false, error: `Element '${target}' not found on page` };
+      return { success: false, error: `Input element '${target}' not found on page` };
     }
 
     highlightElement(el);
     el.scrollIntoView({ behavior: "smooth", block: "center" });
-    await sleep(250);
+    await sleep(80);
 
     el.focus();
-    el.value = action.text || "";
+
+    // Use native prototype value setter for React/Vue/Polymer input tracking
+    try {
+      const proto = el instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+      if (setter) {
+        setter.call(el, action.text || "");
+      } else {
+        el.value = action.text || "";
+      }
+    } catch (e) {
+      el.value = action.text || "";
+    }
+
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Auto-submit search box with Enter
+    const isSearch = target.includes("search") || (el.id && el.id.includes("search")) || el.name === "q" || el.name === "search_query";
+    if (isSearch && action.text) {
+      await sleep(50);
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+
+      if (el.form) {
+        el.form.requestSubmit ? el.form.requestSubmit() : el.form.submit();
+      }
+
+      // If YouTube search button exists, also click it
+      const ytdSearchBtn = document.querySelector("button#search-icon-legacy, ytd-searchbox button");
+      if (ytdSearchBtn) {
+        ytdSearchBtn.click();
+      }
+    }
+
     return { success: true, message: `Typed '${action.text}' into '${target}'` };
+  } else if (actType === "press_key") {
+    const key = action.key || "Enter";
+    const activeEl = document.activeElement || document.body;
+    activeEl.dispatchEvent(new KeyboardEvent("keydown", { key: key, code: key, bubbles: true }));
+    activeEl.dispatchEvent(new KeyboardEvent("keyup", { key: key, code: key, bubbles: true }));
+
+    if (key.toLowerCase() === "enter" && activeEl.form) {
+      activeEl.form.requestSubmit ? activeEl.form.requestSubmit() : activeEl.form.submit();
+    }
+    return { success: true, message: `Pressed key '${key}'` };
   } else if (actType === "scroll") {
     const delta = action.scroll_delta_y || action.amount || action.delta_y || 400;
     window.scrollBy({ top: delta, behavior: "smooth" });
-    await sleep(400);
+    await sleep(200);
     return { success: true, message: `Scrolled page by ${delta}px` };
   } else if (actType === "wait") {
-    const sec = action.wait_seconds || action.seconds || 1.0;
+    const sec = Math.min(action.wait_seconds || action.seconds || 1.0, 5.0);
     await sleep(sec * 1000);
     return { success: true, message: `Waited for ${sec}s` };
   } else if (actType === "navigate") {
@@ -247,19 +374,31 @@ function resolveTargetElement(target) {
   if (!target) return null;
   const cleanId = target.replace(/\[data-agent-id=["']?([^"']+)["']?\]/, "$1").trim();
 
-  // 1. By data-agent-id
+  // 1. YouTube video title link resolution
+  if (cleanId === "id-video-title" || cleanId.includes("video-title") || cleanId.includes("watch")) {
+    const videoLink = document.querySelector("a#video-title, ytd-video-renderer a#video-title, a[href*='/watch?v=']");
+    if (videoLink) return videoLink;
+  }
+
+  // 2. Search input resolution
+  if (cleanId === "id-search" || cleanId === "search" || cleanId === "elem-3" || cleanId.includes("search-input")) {
+    const searchInput = document.querySelector("input#search, input[name='search_query'], textarea[name='q'], input[type='search']");
+    if (searchInput) return searchInput;
+  }
+
+  // 3. By data-agent-id
   let el = document.querySelector(`[data-agent-id="${cleanId}"]`);
   if (el) return el;
 
-  // 2. By ID or standard selector
+  // 4. By ID or standard selector
   try {
     el = document.querySelector(target) || document.querySelector(`#${cleanId}`);
     if (el) return el;
   } catch (e) {}
 
-  // 3. Fallback by button or link text
-  const buttons = Array.from(document.querySelectorAll("button, a"));
-  const match = buttons.find(b => (b.innerText || "").trim().toLowerCase().includes(cleanId.toLowerCase()));
+  // 5. Fallback by button or link text
+  const buttons = Array.from(document.querySelectorAll("button, a, input[type='submit']"));
+  const match = buttons.find(b => (b.innerText || b.value || "").trim().toLowerCase().includes(cleanId.toLowerCase()));
   if (match) return match;
 
   return null;
@@ -270,14 +409,14 @@ function highlightElement(el) {
   el.classList.add("bp-target-highlight");
   setTimeout(() => {
     el.classList.remove("bp-target-highlight");
-  }, 1200);
+  }, 800);
 }
 
 // =========================================================================
 // In-Tab Floating HUD
 // =========================================================================
 
-function createHud(goal, maxSteps) {
+function createHud(goal, maxSteps, model = "llama3.2:3b") {
   if (currentHud) currentHud.remove();
 
   const hud = document.createElement("div");
@@ -287,13 +426,14 @@ function createHud(goal, maxSteps) {
       <div class="bp-hud-brand">
         <span class="bp-hud-dot"></span>
         <span>Klick AI</span>
+        <span class="bp-hud-model-pill">${model}</span>
       </div>
       <span class="bp-hud-step" id="bp-hud-step-text">Step 1 / ${maxSteps}</span>
     </div>
     <div class="bp-hud-thought" id="bp-hud-thought-text">Starting autonomous task...</div>
     <div class="bp-hud-action" id="bp-hud-action-text" style="display: none;"></div>
     <div class="bp-hud-footer">
-      <span style="font-size: 10px; color: #64748b;">Direct In-Tab Mode</span>
+      <span style="font-size: 10px; color: #94a3b8;">Direct In-Tab Mode</span>
       <button class="bp-hud-stop-btn" id="bp-hud-stop-trigger">Stop</button>
     </div>
   `;
@@ -331,15 +471,15 @@ function updateHud(step, maxSteps, thought, action, isFinished = false) {
     if (stopBtn) stopBtn.style.display = "none";
     setTimeout(() => {
       if (currentHud) {
-        currentHud.style.transition = "opacity 0.6s ease, transform 0.6s ease";
+        currentHud.style.transition = "opacity 0.5s ease, transform 0.5s ease";
         currentHud.style.opacity = "0";
         currentHud.style.transform = "translateY(12px)";
         setTimeout(() => {
           if (currentHud) currentHud.remove();
           currentHud = null;
-        }, 600);
+        }, 500);
       }
-    }, 6000);
+    }, 4500);
   }
 }
 

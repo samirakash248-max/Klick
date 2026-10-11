@@ -127,15 +127,28 @@ body::-webkit-scrollbar-thumb {
   background: var(--accent-red);
 }
 
+.model-badge {
+  font-family: monospace;
+  font-size: 10px;
+  background: rgba(2, 132, 199, 0.2);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+
 .icon-btn {
   color: var(--text-muted);
   text-decoration: none;
-  font-size: 14px;
+  font-size: 13px;
   padding: 2px 6px;
   border-radius: 4px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .icon-btn:hover {
@@ -149,6 +162,31 @@ body::-webkit-scrollbar-thumb {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 9px 11px;
+}
+
+.tab-box-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.engine-mode-select {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.engine-mode-select select {
+  background: var(--bg-input);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 10px;
+  padding: 2px 4px;
+  outline: none;
 }
 
 .tab-label {

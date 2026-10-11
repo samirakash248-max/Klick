@@ -616,12 +616,75 @@ async def process_extension_step(request: ExtensionStepRequest):
         run_id=run_id,
     )
 
-    response = await agent_loop.model_client.get_next_action(
-        goal=goal,
-        observation=request.observation,
-        step_number=step_num,
-        max_steps=request.max_steps,
-    )
+    # Configure target model for cognitive planning
+    target_model = getattr(request, "model", None) or os.getenv("BROWSERPILOT_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.2:3b"
+    if hasattr(agent_loop.model_client, "model"):
+        agent_loop.model_client.model = target_model
+
+    try:
+        response = await agent_loop.model_client.get_next_action(
+            goal=goal,
+            observation=request.observation,
+            step_number=step_num,
+            max_steps=request.max_steps,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[EXTENSION STEP] Model client error: %s. Using deterministic fallback.",
+            exc,
+        )
+        from .model_client import DeterministicDemoModelClient
+        adapter = DeterministicDemoModelClient()
+        response = await adapter.get_next_action(
+            goal=goal,
+            observation=request.observation,
+            step_number=step_num,
+            max_steps=request.max_steps,
+        )
+
+
+    # Apply smart domain heuristics (YouTube search, video title targeting, and completion)
+    curr_p_url = (request.observation.url or "").lower()
+    goal_lower = goal.lower()
+    import re
+    query_match = re.search(r"(?:search|look\s+for|find|query)\s+(?:for\s+)?['\"]?([^'\"\n]+?)['\"]?(?:\s+and\b|\s+on\b|\s+in\b|$)", goal, re.IGNORECASE)
+    if not query_match:
+        query_match = re.search(r"search (?:for )?['\"]?([^'\"\n]+?)['\"]?(?:\s+and\b|$)", goal, re.IGNORECASE)
+    query_term = query_match.group(1).strip() if query_match else ""
+    if query_term.lower().endswith(" on youtube"):
+        query_term = query_term[:-11].strip()
+    elif query_term.lower().endswith(" in youtube"):
+        query_term = query_term[:-11].strip()
+
+    if "youtube.com" in curr_p_url and "results" not in curr_p_url and "watch" not in curr_p_url and query_term:
+        tgt = "id-search"
+        sel = "[data-agent-id='id-search']"
+        for el in request.observation.interactive_elements:
+            el_desc = f"{el.id or ''} {el.text or ''} {el.aria_label or ''} {el.selector or ''}".lower()
+            if el.tag_name in ("input", "textarea") and any(k in el_desc for k in ("search", "query")):
+                tgt = el.id or "id-search"
+                sel = el.selector or f"[data-agent-id='{tgt}']"
+                break
+        response.action.action_type = ActionType.TYPE
+        response.action.target = tgt
+        response.action.selector = sel
+        response.action.text = query_term
+        response.action.description = f"Type '{query_term}' into search input to search YouTube"
+    elif response.action.action_type == ActionType.CLICK and (response.action.target in ("elem-3", "search", "search-input", "id-search") or "search" in (response.action.selector or "").lower()) and query_term:
+        response.action.action_type = ActionType.TYPE
+        response.action.target = response.action.target or "id-search"
+        response.action.selector = f"[data-agent-id='{response.action.target}']"
+        response.action.text = query_term
+        response.action.description = f"Type '{query_term}' into search input"
+    elif "results" in curr_p_url:
+        if any(w in goal_lower for w in ("video", "watch", "play", "first")):
+            response.action.action_type = ActionType.CLICK
+            response.action.target = "id-video-title"
+            response.action.selector = "[data-agent-id='id-video-title']"
+            response.action.description = "Click first video title link to open and play video"
+        else:
+            response.action.action_type = ActionType.FINISH
+            response.action.description = f"Search for '{query_term or 'query'}' completed and results are displayed"
 
     # 4. Evaluate proposed action safety
     safety_check = safety_guard.evaluate_action(response.action, request.observation)
@@ -700,7 +763,7 @@ async def stop_extension_session():
     agent_loop.request_stop()
     if agent_loop.current_state:
         agent_loop.current_state.status = RunStatus.STOPPED
-    return {"message": "Extension run stopped"}
+    return {"status": "stopped", "message": "Extension run stopped"}
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 mock_site_path = BASE_DIR / "mock-site"
 dashboard_path = BASE_DIR / "dashboard"

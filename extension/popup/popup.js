@@ -1,6 +1,7 @@
 /**
  * Klick AI - Popup Controller
- * Manages active tab detection, custom tasks, preset recipes, and real-time execution monitoring.
+ * Manages active tab detection, custom tasks, preset recipes, execution mode,
+ * and real-time execution monitoring with local Ollama Llama 3.2 support.
  */
 
 const BACKEND_BASE = "http://127.0.0.1:8000";
@@ -8,8 +9,18 @@ const BACKEND_BASE = "http://127.0.0.1:8000";
 let currentTab = null;
 let pollInterval = null;
 
-// Built-in Task Recipes
+// Built-in Task Recipes (matching modern Klick autonomous capabilities)
 const PRESETS = {
+  youtube: {
+    title: "YouTube Search & Play",
+    prompt: "Open YouTube, search for casetoo, and play the first video that appears.",
+    steps: 10
+  },
+  google: {
+    title: "Google Search & Extract",
+    prompt: "Search Google for top AI developments and summarize the top 3 results.",
+    steps: 6
+  },
   summarize: {
     title: "Summarize Page",
     prompt: "Extract the core article and summarize the key insights and takeaways from this page.",
@@ -29,16 +40,6 @@ const PRESETS = {
     title: "Find Pricing Plans",
     prompt: "Locate pricing information, subscription plans, tiers, or product costs on this website.",
     steps: 7
-  },
-  links: {
-    title: "Collect Resources & Links",
-    prompt: "Scan this page and compile all relevant outbound navigation links, documentation, and files.",
-    steps: 6
-  },
-  audit: {
-    title: "Element & QA Audit",
-    prompt: "Perform a functional inspection on this page: check buttons, search bars, and links for errors.",
-    steps: 8
   }
 };
 
@@ -109,35 +110,51 @@ async function detectActiveTab() {
 }
 
 // =========================================================================
-// Backend Connectivity Check
+// Backend Connectivity & Model Check
 // =========================================================================
 
 async function checkBackendStatus() {
   const dot = document.getElementById("backend-dot");
   const text = document.getElementById("backend-text");
+  const modelPill = document.getElementById("model-pill");
 
   try {
-    const res = await fetch(`${BACKEND_BASE}/health`, { signal: AbortSignal.timeout(2000) });
+    const res = await fetch(`${BACKEND_BASE}/api/health`, { signal: AbortSignal.timeout(2000) });
     if (res.ok) {
-      if (dot) {
-        dot.className = "status-dot online";
-      }
+      if (dot) dot.className = "status-dot online";
       if (text) text.textContent = "ONLINE";
+      if (modelPill) {
+        modelPill.textContent = "llama3.2:3b";
+        modelPill.style.borderColor = "rgba(56, 189, 248, 0.4)";
+        modelPill.style.color = "#38bdf8";
+      }
       return true;
     }
   } catch {
-    // Offline
+    // Fallback to basic /health
+    try {
+      const fb = await fetch(`${BACKEND_BASE}/health`, { signal: AbortSignal.timeout(1500) });
+      if (fb.ok) {
+        if (dot) dot.className = "status-dot online";
+        if (text) text.textContent = "ONLINE";
+        if (modelPill) modelPill.textContent = "llama3.2:3b";
+        return true;
+      }
+    } catch {}
   }
 
-  if (dot) {
-    dot.className = "status-dot offline";
-  }
+  if (dot) dot.className = "status-dot offline";
   if (text) text.textContent = "OFFLINE";
+  if (modelPill) {
+    modelPill.textContent = "offline";
+    modelPill.style.borderColor = "rgba(239, 68, 68, 0.4)";
+    modelPill.style.color = "#ef4444";
+  }
   return false;
 }
 
 // =========================================================================
-// Custom Tasks Management (Storage & Execution)
+// Custom Tasks Management
 // =========================================================================
 
 async function loadCustomTasks() {
@@ -176,7 +193,6 @@ async function loadCustomTasks() {
     listElem.appendChild(item);
   });
 
-  // Attach button handlers
   listElem.querySelectorAll(".btn-run-custom").forEach(btn => {
     btn.addEventListener("click", () => {
       const idx = parseInt(btn.getAttribute("data-idx"), 10);
@@ -240,7 +256,6 @@ function setupBuilder() {
       list.push(newTask);
       await chrome.storage.local.set({ customTasks: list });
 
-      // Reset form
       document.getElementById("task-name").value = "";
       document.getElementById("task-goal").value = "";
       switchToTab("tab-tasks");
@@ -290,7 +305,6 @@ async function runCustomTask(task) {
     targetUrl = task.customUrl;
   }
 
-  // Interpolate dynamic tokens
   let resolvedGoal = task.goal;
   if (currentTab) {
     resolvedGoal = resolvedGoal.replace(/\{\{current_url\}\}/g, currentTab.url || "");
@@ -307,33 +321,36 @@ async function executeGoal(goal, startUrl, maxSteps = 10) {
   const monitorGoal = document.getElementById("monitor-goal");
   const monitorAction = document.getElementById("monitor-action");
   const stopBtn = document.getElementById("btn-stop-agent");
+  const execMode = document.getElementById("exec-mode")?.value || "intab";
+  const targetModel = "llama3.2:3b";
 
   if (monitorStatus) {
     monitorStatus.className = "monitor-badge running";
     monitorStatus.textContent = "RUNNING";
   }
   if (monitorGoal) monitorGoal.textContent = goal;
-  if (monitorAction) monitorAction.textContent = "Executing directly in active tab...";
+  if (monitorAction) monitorAction.textContent = execMode === "intab" ? "Executing directly in active tab..." : "Launching visible desktop Chromium window...";
   if (stopBtn) stopBtn.disabled = false;
 
-  // 1. Direct in-tab mode: send to active tab's content script (no extra Chrome window)
-  if (currentTab && currentTab.id) {
+  // 1. Direct in-tab mode: send to active tab content script
+  if (execMode === "intab" && currentTab && currentTab.id) {
     try {
       const response = await chrome.tabs.sendMessage(currentTab.id, {
         action: "run_in_tab",
         goal: goal,
-        maxSteps: maxSteps
+        maxSteps: maxSteps,
+        model: targetModel
       });
       if (response && response.success) {
         if (monitorAction) monitorAction.textContent = "Task executing directly inside active tab.";
         return;
       }
     } catch (tabErr) {
-      console.warn("Content script not reachable on current tab, falling back to background:", tabErr);
+      console.warn("Content script not reachable on current tab, falling back to desktop runner:", tabErr);
     }
   }
 
-  // 2. Fallback: if tab cannot be injected directly, start via backend API
+  // 2. Desktop runner mode: submit to FastAPI backend
   try {
     const res = await fetch(`${BACKEND_BASE}/api/agent/start`, {
       method: "POST",
@@ -341,7 +358,8 @@ async function executeGoal(goal, startUrl, maxSteps = 10) {
       body: JSON.stringify({
         goal: goal,
         start_url: startUrl || undefined,
-        max_steps: maxSteps
+        max_steps: maxSteps,
+        model: targetModel
       })
     });
 
@@ -373,9 +391,7 @@ async function pollAgentState() {
 
     const state = await res.json();
     updateMonitorUI(state);
-  } catch {
-    // Ignore transient poll failures
-  }
+  } catch {}
 }
 
 function updateMonitorUI(state) {
@@ -441,7 +457,6 @@ function updateMonitorUI(state) {
 function setupMonitorActions() {
   const stopBtn = document.getElementById("btn-stop-agent");
   const reloadBtn = document.getElementById("btn-reload-agent");
-  const dashboardBtn = document.getElementById("btn-view-dashboard");
 
   if (stopBtn) {
     stopBtn.addEventListener("click", async () => {
@@ -449,11 +464,11 @@ function setupMonitorActions() {
         if (currentTab && currentTab.id) {
           chrome.tabs.sendMessage(currentTab.id, { action: "stop_task" }).catch(() => {});
         }
-        await fetch(`${BACKEND_BASE}/api/extension/stop`, { method: "POST" }).catch(() => {});
-        await fetch(`${BACKEND_BASE}/api/agent/stop`, { method: "POST" }).catch(() => {});
-        stopBtn.disabled = true;
+        await fetch(`${BACKEND_BASE}/api/agent/stop`, { method: "POST" });
+        await fetch(`${BACKEND_BASE}/stop`, { method: "POST" });
+        await fetch(`${BACKEND_BASE}/api/extension/stop`, { method: "POST" });
       } catch (err) {
-        console.error("Failed to stop agent:", err);
+        console.warn("Stop dispatch error:", err);
       }
     });
   }
@@ -461,28 +476,18 @@ function setupMonitorActions() {
   if (reloadBtn) {
     reloadBtn.addEventListener("click", async () => {
       try {
-        await fetch(`${BACKEND_BASE}/reset`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({})
-        });
-        alert("Browser session cleanly reset!");
+        await fetch(`${BACKEND_BASE}/reset`, { method: "POST" });
+        pollAgentState();
       } catch (err) {
-        console.error("Failed to reset session:", err);
+        console.warn("Reload dispatch error:", err);
       }
-    });
-  }
-
-  if (dashboardBtn) {
-    dashboardBtn.addEventListener("click", () => {
-      chrome.tabs.create({ url: `${BACKEND_BASE}/dashboard/index.html` });
     });
   }
 }
 
 function escapeHtml(str) {
   if (!str) return "";
-  return str
+  return String(str)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

@@ -14,21 +14,32 @@
         <div class="brand-badge">K</div>
         <div class="brand-info">
           <h2>Klick</h2>
-          <span>Custom Task Assistant</span>
+          <span>Autonomous Browser Agent</span>
         </div>
       </div>
       <div class="status-wrap">
-        <div class="status-pill" id="backend-status" title="Local Backend Status">
+        <div class="status-pill" id="backend-status" title="FastAPI Backend Status">
           <span class="status-dot" id="backend-dot"></span>
           <span class="status-text" id="backend-text">Checking...</span>
         </div>
-        <a href="http://127.0.0.1:8000/dashboard/index.html" target="_blank" class="icon-btn" title="Open Full Dashboard">↗</a>
+        <span class="model-badge" id="model-pill" title="Configured Local Ollama Model">llama3.2:3b</span>
+        <a href="http://localhost:8501" target="_blank" class="icon-btn" title="Open Streamlit Control Center (Port 8501)">📊</a>
+        <a href="http://127.0.0.1:8000/docs" target="_blank" class="icon-btn" title="Open API Docs (Port 8000)">↗</a>
       </div>
     </header>
 
     <!-- Current Tab Banner -->
     <div class="current-tab-box">
-      <span class="tab-label">ACTIVE TAB</span>
+      <div class="tab-box-top">
+        <span class="tab-label">ACTIVE TAB</span>
+        <div class="engine-mode-select">
+          <label for="exec-mode">Mode:</label>
+          <select id="exec-mode">
+            <option value="intab" selected>In-Tab (Direct)</option>
+            <option value="desktop">Desktop Window</option>
+          </select>
+        </div>
+      </div>
       <div class="tab-title" id="tab-title">Detecting current tab...</div>
       <div class="tab-url" id="tab-url"></div>
     </div>
@@ -44,9 +55,9 @@
     <section class="tab-content active" id="tab-tasks">
       <!-- Quick Prompt Input -->
       <div class="quick-input-card">
-        <label for="quick-goal">Run Custom Goal on this Page</label>
+        <label for="quick-goal">Run Natural Language Goal</label>
         <div class="input-row">
-          <input type="text" id="quick-goal" placeholder="e.g. Find contact email and pricing table..." />
+          <input type="text" id="quick-goal" placeholder="e.g. search for casetoo and play first video..." />
           <button id="btn-quick-run" class="btn btn-primary">Run</button>
         </div>
       </div>
@@ -66,11 +77,29 @@
         <span class="badge">6</span>
       </div>
       <div class="preset-grid">
+        <div class="preset-card" data-preset="youtube">
+          <div class="preset-icon">🎥</div>
+          <div class="preset-info">
+            <h4>YouTube Search & Play</h4>
+            <p>Search YouTube & play first video</p>
+          </div>
+          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
+        </div>
+
+        <div class="preset-card" data-preset="google">
+          <div class="preset-icon">🔍</div>
+          <div class="preset-info">
+            <h4>Google Search & Extract</h4>
+            <p>Search Google & extract findings</p>
+          </div>
+          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
+        </div>
+
         <div class="preset-card" data-preset="summarize">
           <div class="preset-icon">📝</div>
           <div class="preset-info">
-            <h4>Summarize Article</h4>
-            <p>Extract key takeaways & main article</p>
+            <h4>Summarize Page</h4>
+            <p>Extract takeaways & main article</p>
           </div>
           <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
         </div>
@@ -79,7 +108,7 @@
           <div class="preset-icon">📊</div>
           <div class="preset-info">
             <h4>Extract Tables & Data</h4>
-            <p>Parse tables and lists to structured JSON</p>
+            <p>Parse tables and lists to JSON</p>
           </div>
           <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
         </div>
@@ -88,7 +117,7 @@
           <div class="preset-icon">✍️</div>
           <div class="preset-info">
             <h4>Fill Form Fields</h4>
-            <p>Identify input fields and complete form</p>
+            <p>Auto-detect inputs & complete form</p>
           </div>
           <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
         </div>
@@ -98,24 +127,6 @@
           <div class="preset-info">
             <h4>Find Pricing Plans</h4>
             <p>Locate tier pricing & discount details</p>
-          </div>
-          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
-        </div>
-
-        <div class="preset-card" data-preset="links">
-          <div class="preset-icon">🔗</div>
-          <div class="preset-info">
-            <h4>Collect All Links</h4>
-            <p>Audit outbound links and resources</p>
-          </div>
-          <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
-        </div>
-
-        <div class="preset-card" data-preset="audit">
-          <div class="preset-icon">🛡️</div>
-          <div class="preset-info">
-            <h4>Element & QA Audit</h4>
-            <p>Verify buttons, inputs, and layout</p>
           </div>
           <button class="btn btn-sm btn-outline btn-run-preset">Run</button>
         </div>
@@ -130,12 +141,12 @@
 
         <div class="form-group">
           <label for="task-name">Task Name</label>
-          <input type="text" id="task-name" placeholder="e.g. Export Invoice Summary, Check Stock" />
+          <input type="text" id="task-name" placeholder="e.g. YouTube Casetoo Video, Stock Check" />
         </div>
 
         <div class="form-group">
           <label for="task-goal">Goal Prompt Template</label>
-          <textarea id="task-goal" rows="3" placeholder="e.g. Find products with discount > 20%, click view details, and extract the price..."></textarea>
+          <textarea id="task-goal" rows="3" placeholder="e.g. open youtube and search for casetoo and play the first video..."></textarea>
           <span class="hint-tokens">Tokens: <code>{{current_url}}</code>, <code>{{current_title}}</code></span>
         </div>
 
@@ -149,7 +160,7 @@
 
         <div class="form-group hidden" id="group-custom-url">
           <label for="task-custom-url">Custom URL</label>
-          <input type="url" id="task-custom-url" placeholder="https://example.com" />
+          <input type="url" id="task-custom-url" placeholder="https://www.youtube.com" />
         </div>
 
         <div class="form-group">
@@ -182,14 +193,14 @@
         <div class="monitor-actions">
           <button id="btn-stop-agent" class="btn btn-danger btn-sm" disabled>🛑 Stop Agent</button>
           <button id="btn-reload-agent" class="btn btn-secondary btn-sm">🔄 Reset Session</button>
-          <button id="btn-view-dashboard" class="btn btn-outline btn-sm">↗ View Dashboard</button>
+          <a href="http://localhost:8501" target="_blank" class="btn btn-outline btn-sm">📊 Control Center</a>
         </div>
       </div>
     </section>
 
     <!-- Footer -->
     <footer class="popup-footer">
-      <span>Klick AI • Local Agent v0.1.0</span>
+      <span>Klick AI • llama3.2:3b</span>
       <span id="footer-agent-status">Ready</span>
     </footer>
   </div>

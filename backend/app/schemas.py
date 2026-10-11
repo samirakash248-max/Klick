@@ -500,6 +500,7 @@ class ExtensionStepRequest(BaseModel):
     max_steps: int = Field(default=10, description="Max step bounds")
     observation: PageObservation = Field(..., description="Fresh page observation extracted by content script")
     last_result: Optional[Dict[str, Any]] = Field(default=None, description="Execution result from prior step")
+    model: Optional[str] = Field(default=None, description="Optional model override (e.g. llama3.2:3b)")
 
 
 class ExtensionStepResponse(BaseModel):

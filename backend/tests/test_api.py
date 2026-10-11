@@ -231,3 +231,42 @@ async def test_safety_guard_blocks_destructive_direct_action():
         data = resp.json()
         assert data["success"] is False
         assert "SafetyGuard" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_extension_step_and_stop_endpoints():
+    """Verify POST /api/extension/step processes in-tab observations with model override and heuristics."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        step_payload = {
+            "run_id": "ext-test-123",
+            "goal": "open youtube and search for casetoo and play the first video",
+            "step": 1,
+            "max_steps": 10,
+            "model": "llama3.2:3b",
+            "observation": {
+                "url": "https://www.youtube.com/",
+                "title": "YouTube",
+                "interactive_elements": [
+                    {
+                        "id": "id-search",
+                        "tag_name": "input",
+                        "text": "",
+                        "selector": "input#search",
+                        "aria_label": "Search"
+                    }
+                ]
+            }
+        }
+        resp = await client.post("/api/extension/step", json=step_payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "action" in data
+        assert data["action"]["action_type"] == "type"
+        assert "casetoo" in data["action"]["text"]
+
+        # Test stop endpoint
+        stop_resp = await client.post("/api/extension/stop")
+        assert stop_resp.status_code == 200
+        assert stop_resp.json()["status"] == "stopped"
+
+

@@ -36,6 +36,16 @@
   color: #00e5ff;
 }
 
+.bp-hud-model-pill {
+  font-size: 10px;
+  font-family: monospace;
+  background: rgba(2, 132, 199, 0.25);
+  color: #38bdf8;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
 .bp-hud-dot {
   width: 9px;
   height: 9px;
