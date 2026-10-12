@@ -164,3 +164,70 @@ class BackendClient:
                 return {"success": False, "error": f"HTTP {res.status_code}: {res.text}"}
         except Exception as exc:
             return {"success": False, "error": str(exc)}
+
+    def get_tabs(self) -> Dict[str, Any]:
+        """Fetch all currently open browser tabs and active index."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/tabs")
+                if res.status_code == 200:
+                    return res.json()
+                return {"tabs": [], "count": 0, "active_index": 0}
+        except Exception:
+            return {"tabs": [], "count": 0, "active_index": 0}
+
+    def switch_tab(self, tab_index: Optional[int] = None, target: Optional[str] = None) -> Dict[str, Any]:
+        """Switch active browser tab focus by index or title."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/tabs/switch", json={"tab_index": tab_index, "target": target})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def new_tab(self, url: Optional[str] = None) -> Dict[str, Any]:
+        """Open a new browser tab with optional URL."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/tabs/new", json={"url": url})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def close_tab(self, tab_index: Optional[int] = None, target: Optional[str] = None) -> Dict[str, Any]:
+        """Close an open browser tab."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/tabs/close", json={"tab_index": tab_index, "target": target})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def get_profile_status(self) -> Dict[str, Any]:
+        """Fetch browser profile persistence configuration and cookie backup status."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/profile/status")
+                if res.status_code == 200:
+                    return res.json()
+                return {"persistent_profile": False, "cookies_saved": False}
+        except Exception:
+            return {"persistent_profile": False, "cookies_saved": False}
+
+    def clear_profile(self) -> Dict[str, Any]:
+        """Clear cookies and reset persistent profile session cache."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/profile/clear")
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+

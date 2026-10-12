@@ -25,8 +25,12 @@ class ActionType(str, Enum):
     SCROLL = "scroll"
     WAIT = "wait"
     EXTRACT = "extract"
+    SWITCH_TAB = "switch_tab"
+    NEW_TAB = "new_tab"
+    CLOSE_TAB = "close_tab"
     FINISH = "finish"
     FAIL = "fail"
+
 
 
 class RunStatus(str, Enum):
@@ -94,6 +98,14 @@ class PageObservation(BaseModel):
         default=None,
         description="Observation error description if capture partially failed"
     )
+    open_tabs: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of open browser tabs with index, title, url, is_active"
+    )
+    active_tab_index: int = Field(
+        default=0,
+        description="Index of the currently active tab"
+    )
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="Timestamp of observation"
@@ -123,6 +135,10 @@ class BrowserAction(BaseModel):
         default=None,
         description="Keyboard key to press (e.g. 'Enter', 'Tab', 'Escape')"
     )
+    tab_index: Optional[int] = Field(
+        default=None,
+        description="Target tab index (0-based) for switch_tab or close_tab actions"
+    )
     scroll_delta_y: Optional[int] = Field(
         default=None,
         description="Vertical scroll amount in pixels (positive down, negative up)"
@@ -139,6 +155,7 @@ class BrowserAction(BaseModel):
         default=None,
         description="Plain text description of the target element (for verification)"
     )
+
 
     @model_validator(mode="before")
     @classmethod
@@ -168,12 +185,24 @@ class BrowserAction(BaseModel):
                     act_str = "type"
                 elif act_str in ("play", "watch") or act_str.startswith("click") or act_str.startswith("select") or act_str.startswith("skip"):
                     act_str = "click"
-                elif act_str == "extract":
-                    if data.get("url"):
-                        act_str = "navigate"
-                    else:
-                        act_str = "click"
+                elif act_str in ("switch_tab", "switch-tab", "switch_to_tab", "focus_tab", "select_tab"):
+                    act_str = "switch_tab"
+                elif act_str in ("new_tab", "new-tab", "open_tab", "create_tab"):
+                    act_str = "new_tab"
+                elif act_str in ("close_tab", "close-tab", "close_current_tab"):
+                    act_str = "close_tab"
                 data["action_type"] = act_str
+
+            # Support tab_index extraction from common aliases
+            if "tab_index" not in data or data.get("tab_index") is None:
+                for k in ("index", "tab", "tab_number", "tab_idx"):
+                    if k in data and data.get(k) is not None:
+                        try:
+                            data["tab_index"] = int(data[k])
+                            break
+                        except (ValueError, TypeError):
+                            pass
+
 
             # Support value alias (e.g. {"type": "navigate", "value": "..."})
             if "value" in data and data.get("value"):

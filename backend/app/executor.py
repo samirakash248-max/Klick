@@ -49,6 +49,9 @@ MIN_SCROLL_PIXELS = -2000
 MOCK_SITE_DIR = Path(__file__).resolve().parent.parent.parent / "mock-site"
 MOCK_SITE_DEFAULT_URL = f"file:///{(MOCK_SITE_DIR / 'index.html').as_posix()}"
 ALLOW_EXTERNAL_URLS = os.getenv("BROWSERPILOT_ALLOW_EXTERNAL", "true").lower() in ("true", "1", "yes")
+DEFAULT_PROFILE_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "browser_profile"
+PERSISTENT_PROFILE_ENABLED = os.getenv("BROWSERPILOT_PERSISTENT_PROFILE", "true").lower() in ("true", "1", "yes")
+
 
 STEALTH_CHROME_ARGS = [
     "--disable-blink-features=AutomationControlled",
@@ -146,11 +149,16 @@ class PlaywrightExecutor:
         headless: bool = False,
         slow_mo_ms: int = 0,
         allow_external: bool = False,
+        user_data_dir: Optional[str] = None,
+        persistent_profile: bool = True,
     ) -> None:
         self.headless = headless
         self.slow_mo_ms = slow_mo_ms
         self.allow_external = allow_external
+        self.user_data_dir = user_data_dir or os.getenv("BROWSERPILOT_USER_DATA_DIR") or str(DEFAULT_PROFILE_DIR)
+        self.persistent_profile = persistent_profile if persistent_profile is not None else PERSISTENT_PROFILE_ENABLED
         self._page: Optional[Page] = page
+        self._pages: List[Page] = [page] if page else []
         self._context: Optional[BrowserContext] = None
         self._browser: Optional[Browser] = None
         self._playwright: Optional[Playwright] = None
@@ -180,20 +188,149 @@ class PlaywrightExecutor:
 
     @property
     def current_page(self) -> Optional[Page]:
-        """Return the active page instance."""
+        """Return the active page instance, falling back to any open tab."""
         try:
             current_loop = asyncio.get_running_loop()
             if self._loop is not None and self._loop != current_loop:
                 return None
         except RuntimeError:
             pass
-        return self._page
+
+        if self._page and not self._page.is_closed():
+            return self._page
+
+        # Fall back to any open page from tracked pages or context
+        if self._pages:
+            self._pages = [p for p in self._pages if not p.is_closed()]
+            if self._pages:
+                self._page = self._pages[-1]
+                return self._page
+
+        if self._context and self._context.pages:
+            open_pages = [p for p in self._context.pages if not p.is_closed()]
+            if open_pages:
+                self._page = open_pages[-1]
+                return self._page
+
+        return None
+
+    def _setup_context_listeners(self, context: BrowserContext) -> None:
+        """Attach listeners to track tab creation, popups, and tab closures."""
+        self._pages = [p for p in context.pages if not p.is_closed()]
+        context.on("page", self._on_page_created)
+        for p in self._pages:
+            self._attach_page_listeners(p)
+
+    def _attach_page_listeners(self, page: Page) -> None:
+        """Attach listeners to a specific page for popups and closure."""
+        try:
+            page.on("close", lambda p: self._on_page_closed(p))
+            page.on("popup", lambda p: self._on_page_created(p))
+        except Exception:
+            pass
+
+    def _on_page_created(self, page: Page) -> None:
+        """Handle new tab or popup window creation."""
+        if page not in self._pages:
+            self._pages.append(page)
+        self._attach_page_listeners(page)
+        self._page = page
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._safe_bring_to_front(page))
+        except Exception:
+            pass
+
+    def _on_page_closed(self, page: Page) -> None:
+        """Handle tab closure and reassign active page to remaining tabs."""
+        if page in self._pages:
+            self._pages.remove(page)
+        if self._page == page:
+            self._page = self._pages[-1] if self._pages else None
+            if self._page and not self._page.is_closed():
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self._safe_bring_to_front(self._page))
+                except Exception:
+                    pass
+
+    async def _safe_bring_to_front(self, page: Page) -> None:
+        """Safely bring page to front without throwing unhandled exceptions."""
+        try:
+            if page and not page.is_closed():
+                await page.bring_to_front()
+        except Exception:
+            pass
+
+    async def get_open_tabs(self) -> List[Dict[str, Any]]:
+        """Return structured metadata for all currently open browser tabs."""
+        tabs = []
+        self._pages = [p for p in self._pages if not p.is_closed()]
+        if self._context and not self._pages:
+            self._pages = [p for p in self._context.pages if not p.is_closed()]
+
+        for i, p in enumerate(self._pages):
+            try:
+                url = p.url or ""
+                title = await p.title() if not p.is_closed() else ""
+            except Exception:
+                url = ""
+                title = ""
+            tabs.append({
+                "index": i,
+                "title": title or url or f"Tab {i + 1}",
+                "url": url,
+                "is_active": (p == self.current_page),
+            })
+        return tabs
+
+    async def save_cookies(self) -> List[Dict[str, Any]]:
+        """Save current session cookies to JSON backup in user data directory."""
+        try:
+            if self._context:
+                cookies = await self._context.cookies()
+                profile_dir = Path(self.user_data_dir)
+                profile_dir.mkdir(parents=True, exist_ok=True)
+                cookie_file = profile_dir / "cookies.json"
+                import json
+                with open(cookie_file, "w", encoding="utf-8") as f:
+                    json.dump(cookies, f, indent=2)
+                return cookies
+        except Exception:
+            pass
+        return []
+
+    async def load_cookies(self) -> None:
+        """Load session cookies from JSON backup if available."""
+        try:
+            cookie_file = Path(self.user_data_dir) / "cookies.json"
+            if cookie_file.exists() and self._context:
+                import json
+                with open(cookie_file, "r", encoding="utf-8") as f:
+                    cookies = json.load(f)
+                if isinstance(cookies, list) and cookies:
+                    await self._context.add_cookies(cookies)
+        except Exception:
+            pass
+
+    async def clear_profile(self) -> bool:
+        """Clear cookies and reset persistent profile cache."""
+        try:
+            if self._context:
+                await self._context.clear_cookies()
+            cookie_file = Path(self.user_data_dir) / "cookies.json"
+            if cookie_file.exists():
+                cookie_file.unlink(missing_ok=True)
+            return True
+        except Exception:
+            return False
 
     async def initialize(self) -> Page:
         """Start Playwright and launch Chromium browser if not already active."""
         current_loop = asyncio.get_running_loop()
         if self._loop is not None and self._loop != current_loop:
             self._page = None
+            self._pages = []
             self._context = None
             self._browser = None
             self._playwright = None
@@ -202,7 +339,7 @@ class PlaywrightExecutor:
 
         if self._page and not self._page.is_closed():
             try:
-                if self._playwright and self._browser and self._browser.is_connected():
+                if self._playwright and ((self._browser and self._browser.is_connected()) or self._context):
                     return self._page
             except Exception:
                 pass
@@ -226,6 +363,56 @@ class PlaywrightExecutor:
                 if not self._playwright:
                     self._playwright = await async_playwright().start()
 
+                # Attempt persistent context if enabled
+                if self.persistent_profile:
+                    try:
+                        os.makedirs(self.user_data_dir, exist_ok=True)
+                        launch_kwargs = {
+                            "user_data_dir": self.user_data_dir,
+                            "headless": self.headless,
+                            "slow_mo": self.slow_mo_ms,
+                            "args": STEALTH_CHROME_ARGS,
+                            "ignore_default_args": ["--enable-automation"],
+                            "viewport": viewport_size,
+                            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                            "locale": "en-US",
+                            "timezone_id": "America/New_York",
+                            "color_scheme": "light",
+                            "device_scale_factor": 1,
+                            "has_touch": False,
+                            "is_mobile": False,
+                            "permissions": ["geolocation"],
+                        }
+                        context = None
+                        for channel in [None, "chrome", "msedge"]:
+                            try:
+                                kw = dict(launch_kwargs)
+                                if channel:
+                                    kw["channel"] = channel
+                                context = await self._playwright.chromium.launch_persistent_context(**kw)
+                                if context:
+                                    break
+                            except Exception:
+                                pass
+
+                        if context:
+                            self._context = context
+                            self._browser = None
+                            self._page = context.pages[0] if context.pages else await context.new_page()
+                            await self._context.add_init_script(STEALTH_INIT_SCRIPT)
+                            self._setup_context_listeners(self._context)
+                            try:
+                                await self._page.bring_to_front()
+                            except Exception:
+                                pass
+                            self._owns_browser = True
+                            await self.load_cookies()
+                            return self._page
+                    except Exception:
+                        # Fallback to standard launch if persistent context fails
+                        pass
+
+                # Standard ephemeral launch
                 browser = None
                 launch_errors = []
                 for channel in [None, "chrome", "msedge"]:
@@ -260,12 +447,14 @@ class PlaywrightExecutor:
                     permissions=["geolocation"],
                 )
                 await self._context.add_init_script(STEALTH_INIT_SCRIPT)
+                self._setup_context_listeners(self._context)
                 self._page = await self._context.new_page()
                 try:
                     await self._page.bring_to_front()
                 except Exception:
                     pass
                 self._owns_browser = True
+                await self.load_cookies()
                 return self._page
             except Exception as exc:
                 try:
@@ -276,9 +465,11 @@ class PlaywrightExecutor:
                 self._playwright = None
                 self._browser = None
                 self._context = None
+                self._pages = []
                 self._page = None
                 if attempt == 1:
                     raise exc
+
 
     def _clean_agent_id(self, target: Optional[str]) -> Optional[str]:
         """Extract clean agent ID from target or selector string."""
@@ -649,6 +840,7 @@ class PlaywrightExecutor:
             key = action.get("key")
             scroll_delta_y = action.get("scroll_delta_y") or action.get("delta_y") or action.get("amount")
             wait_seconds = action.get("wait_seconds") or action.get("seconds") or action.get("duration")
+            tab_index = action.get("tab_index")
             description = action.get("description", "")
         else:
             return ExecutionResult(
@@ -695,6 +887,12 @@ class PlaywrightExecutor:
                 result = await self._execute_wait(page, target, wait_seconds)
             elif raw_action == "press_key":
                 result = await self._execute_press_key(page, key)
+            elif raw_action in ("switch_tab", "switch-tab", "switch_to_tab", "focus_tab"):
+                result = await self._execute_switch_tab(tab_index, target)
+            elif raw_action in ("new_tab", "new-tab", "open_tab", "create_tab"):
+                result = await self._execute_new_tab(url or target)
+            elif raw_action in ("close_tab", "close-tab", "close_current_tab"):
+                result = await self._execute_close_tab(tab_index, target)
             elif raw_action == "extract":
                 if url:
                     result = await self._execute_navigate(page, url)
@@ -717,6 +915,7 @@ class PlaywrightExecutor:
                 )
             else:
                 result = ExecutionResult(
+
                     success=False,
                     action_type=ActionType.FAIL,
                     action=raw_action,
@@ -1218,6 +1417,140 @@ class PlaywrightExecutor:
             message=f"Pressed key '{key_name}'",
         )
 
+    async def _execute_switch_tab(
+        self, tab_index: Optional[int] = None, target: Optional[str] = None
+    ) -> ExecutionResult:
+        """Switch active focus to another open tab by index or matching title/URL."""
+        tabs = await self.get_open_tabs()
+        if not self._pages:
+            return ExecutionResult(
+                success=False,
+                action_type=ActionType.SWITCH_TAB,
+                action="switch_tab",
+                message="No open browser tabs to switch between",
+                error="No open tabs",
+            )
+
+        target_idx: Optional[int] = None
+        if tab_index is not None and 0 <= tab_index < len(self._pages):
+            target_idx = tab_index
+        elif target:
+            clean_tgt = str(target).strip()
+            if clean_tgt.isdigit() and 0 <= int(clean_tgt) < len(self._pages):
+                target_idx = int(clean_tgt)
+            else:
+                clean_lower = clean_tgt.lower()
+                for i, p in enumerate(self._pages):
+                    try:
+                        p_url = (p.url or "").lower()
+                        p_title = (await p.title() if not p.is_closed() else "").lower()
+                        if clean_lower in p_title or clean_lower in p_url:
+                            target_idx = i
+                            break
+                    except Exception:
+                        pass
+
+        if target_idx is None:
+            # Cycle to next available tab
+            curr_idx = next((i for i, p in enumerate(self._pages) if p == self.current_page), 0)
+            target_idx = (curr_idx + 1) % len(self._pages)
+
+        selected_page = self._pages[target_idx]
+        self._page = selected_page
+        try:
+            await selected_page.bring_to_front()
+            title = await selected_page.title()
+        except Exception:
+            title = selected_page.url or ""
+
+        return ExecutionResult(
+            success=True,
+            action_type=ActionType.SWITCH_TAB,
+            action="switch_tab",
+            target=str(target_idx),
+            message=f"Switched to tab #{target_idx}: '{title}' ({selected_page.url})",
+        )
+
+    async def _execute_new_tab(
+        self, url: Optional[str] = None
+    ) -> ExecutionResult:
+        """Open a new browser tab and optionally navigate to destination URL."""
+        if not self._context:
+            await self.initialize()
+
+        new_page = await self._context.new_page()
+        self._on_page_created(new_page)
+        self._page = new_page
+        try:
+            await new_page.bring_to_front()
+        except Exception:
+            pass
+
+        target_url = url or "about:blank"
+        if target_url and target_url != "about:blank":
+            await self._execute_navigate(new_page, target_url)
+
+        return ExecutionResult(
+            success=True,
+            action_type=ActionType.NEW_TAB,
+            action="new_tab",
+            url=target_url,
+            message=f"Opened new browser tab #{len(self._pages) - 1} at '{target_url}'",
+        )
+
+    async def _execute_close_tab(
+        self, tab_index: Optional[int] = None, target: Optional[str] = None
+    ) -> ExecutionResult:
+        """Close specified tab (or active tab), refocusing on remaining tabs."""
+        await self.get_open_tabs()
+        if not self._pages:
+            return ExecutionResult(
+                success=False,
+                action_type=ActionType.CLOSE_TAB,
+                action="close_tab",
+                message="No open browser tabs to close",
+                error="No open tabs",
+            )
+
+        target_page = self.current_page
+        if tab_index is not None and 0 <= tab_index < len(self._pages):
+            target_page = self._pages[tab_index]
+        elif target and str(target).strip().isdigit():
+            idx = int(str(target).strip())
+            if 0 <= idx < len(self._pages):
+                target_page = self._pages[idx]
+
+        if not target_page:
+            target_page = self._pages[-1]
+
+        closed_url = target_page.url
+        # If closing the only remaining tab, navigate to about:blank to keep browser context alive
+        if len(self._pages) <= 1:
+            try:
+                await target_page.goto("about:blank")
+            except Exception:
+                pass
+            return ExecutionResult(
+                success=True,
+                action_type=ActionType.CLOSE_TAB,
+                action="close_tab",
+                message="Reset last remaining tab to 'about:blank' (kept window open)",
+            )
+
+        try:
+            await target_page.close()
+        except Exception:
+            pass
+        self._on_page_closed(target_page)
+
+        new_active_idx = next((i for i, p in enumerate(self._pages) if p == self.current_page), 0)
+        return ExecutionResult(
+            success=True,
+            action_type=ActionType.CLOSE_TAB,
+            action="close_tab",
+            message=f"Closed tab '{closed_url}'. Active tab is now #{new_active_idx}",
+        )
+
     # Convenience helper methods
     async def click(self, target: str) -> ExecutionResult:
         return await self.execute({"action": "click", "target": target})
@@ -1234,13 +1567,28 @@ class PlaywrightExecutor:
     async def wait(self, seconds: float = 1.0, target: Optional[str] = None) -> ExecutionResult:
         return await self.execute({"action": "wait", "seconds": seconds, "target": target})
 
+    async def switch_tab(self, tab_index: Optional[int] = None, target: Optional[str] = None) -> ExecutionResult:
+        return await self.execute({"action": "switch_tab", "tab_index": tab_index, "target": target})
+
+    async def new_tab(self, url: Optional[str] = None) -> ExecutionResult:
+        return await self.execute({"action": "new_tab", "url": url})
+
+    async def close_tab(self, tab_index: Optional[int] = None, target: Optional[str] = None) -> ExecutionResult:
+        return await self.execute({"action": "close_tab", "tab_index": tab_index, "target": target})
+
     async def close(self) -> None:
-        """Tear down browser session and release resources cleanly."""
+        """Tear down browser session, save cookies, and release resources cleanly."""
         try:
-            if self._page and not self._page.is_closed():
-                await self._page.close()
+            await self.save_cookies()
         except Exception:
             pass
+
+        for p in list(self._pages):
+            try:
+                if not p.is_closed():
+                    await p.close()
+            except Exception:
+                pass
 
         try:
             if self._context:
@@ -1260,11 +1608,13 @@ class PlaywrightExecutor:
         except Exception:
             pass
 
+        self._pages = []
         self._page = None
         self._context = None
         self._browser = None
         self._playwright = None
         self._loop = None
+
 
 
 # Standalone runner for fixed invoice sequence test

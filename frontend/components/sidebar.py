@@ -91,7 +91,70 @@ def render_sidebar(backend_client: BackendClient, ollama_service: OllamaService)
                 unsafe_allow_html=True,
             )
 
-        # 3. Active Run Flow Control
+        # 3. Browser Profile & Multi-Tab Management
+        if backend_health.get("online"):
+            st.subheader("Session & Tabs")
+            prof_status = backend_client.get_profile_status()
+            tabs_data = backend_client.get_tabs()
+            open_tabs = tabs_data.get("tabs", [])
+            tab_count = len(open_tabs)
+            active_idx = tabs_data.get("active_index", 0)
+
+            # Profile Badge
+            if prof_status.get("persistent_profile"):
+                c_count = prof_status.get("saved_cookie_count", 0)
+                st.markdown(
+                    f"""
+                    <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 3px solid #3b82f6; border-radius: 4px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="font-weight: 600; font-size: 0.85rem; color: #1e40af;">Persistent Profile</span>
+                            <span style="font-size: 0.75rem; color: #64748b;">{c_count} cookies</span>
+                        </div>
+                        <div style="font-size: 0.72rem; color: #64748b; margin-top: 0.2rem;">Logins & session state retained</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            
+            # Tabs Viewer / Controller
+            if tab_count > 1:
+                st.markdown(
+                    f"""
+                    <div style="font-size: 0.8rem; font-weight: 600; color: #475569; margin-bottom: 0.25rem;">
+                        Open Tabs ({tab_count})
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                tab_options = [f"#{t['index']} - {t['title'][:28]}" for t in open_tabs]
+                sel_tab_label = st.selectbox(
+                    "Select Tab",
+                    options=tab_options,
+                    index=min(active_idx, len(tab_options) - 1),
+                    key="sidebar_sel_tab",
+                    label_visibility="collapsed",
+                )
+                sel_idx = int(sel_tab_label.split(" - ")[0].replace("#", "")) if sel_tab_label else 0
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("Focus Tab", key="sidebar_focus_tab_btn", use_container_width=True):
+                        backend_client.switch_tab(tab_index=sel_idx)
+                        st.toast(f"Switched focus to Tab #{sel_idx}")
+                        st.rerun()
+                with c2:
+                    if st.button("Close Tab", key="sidebar_close_tab_btn", use_container_width=True):
+                        backend_client.close_tab(tab_index=sel_idx)
+                        st.toast(f"Closed Tab #{sel_idx}")
+                        st.rerun()
+
+            # Profile Clear Option
+            if st.button("Clear Profile & Cookies", key="sidebar_clear_prof_btn", use_container_width=True):
+                backend_client.clear_profile()
+                st.toast("Browser profile session cache and cookies cleared.")
+                st.rerun()
+
+        # 4. Active Run Flow Control
         is_running = st.session_state.get("is_running", False)
         if is_running:
             st.markdown(
@@ -111,8 +174,9 @@ def render_sidebar(backend_client: BackendClient, ollama_service: OllamaService)
 
         st.divider()
 
-        # 4. Settings & Endpoint Overrides
+        # 5. Settings & Endpoint Overrides
         with st.expander("Configuration & Endpoints", expanded=False):
+
             new_backend_url = st.text_input(
                 "Backend URL",
                 value=st.session_state.get("backend_url", backend_client.base_url),

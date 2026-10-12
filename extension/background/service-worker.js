@@ -97,6 +97,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else if (message.action === "clear_badge") {
       await chrome.action.setBadgeText({ text: "" });
       sendResponse({ success: true });
+    } else if (message.action === "new_tab") {
+      try {
+        const newTab = await chrome.tabs.create({ url: message.url || "about:blank" });
+        sendResponse({ success: true, tabId: newTab.id });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
+    } else if (message.action === "switch_tab") {
+      try {
+        if (message.tabId) {
+          await chrome.tabs.update(message.tabId, { active: true });
+          sendResponse({ success: true });
+        } else if (typeof message.tabIndex === "number") {
+          const tabs = await chrome.tabs.query({ currentWindow: true });
+          const targetTab = tabs[message.tabIndex];
+          if (targetTab && targetTab.id) {
+            await chrome.tabs.update(targetTab.id, { active: true });
+            sendResponse({ success: true, tabId: targetTab.id });
+          } else {
+            sendResponse({ success: false, error: "Tab index out of range" });
+          }
+        } else {
+          sendResponse({ success: false, error: "Missing tabId or tabIndex" });
+        }
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
+    } else if (message.action === "close_tab") {
+      try {
+        const tabId = message.tabId || sender?.tab?.id;
+        if (tabId) {
+          await chrome.tabs.remove(tabId);
+          sendResponse({ success: true });
+        } else {
+          sendResponse({ success: false, error: "No target tab to close" });
+        }
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
     }
   })();
   return true; // Keep channel open for async response

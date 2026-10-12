@@ -67,3 +67,5 @@ logs/
 
 # Experiment & Trajectory Data
 data/trajectories/
+data/browser_profile/
+

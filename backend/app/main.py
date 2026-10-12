@@ -47,8 +47,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Body
 from fastapi.middleware.cors import CORSMiddleware
+
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -526,8 +527,85 @@ async def run_custom_task(task_id: str, overrides: Optional[Dict[str, Any]] = No
 
 
 # =====================================================================
+# MULTI-TAB & BROWSER PROFILE MANAGEMENT ENDPOINTS
+# =====================================================================
+
+@app.get("/api/tabs")
+async def get_browser_tabs():
+    """Return all currently open browser tabs and active tab index."""
+    async with get_browser_lock():
+        tabs = await executor.get_open_tabs()
+        active_idx = next((t["index"] for t in tabs if t.get("is_active")), 0) if tabs else 0
+        return {
+            "tabs": tabs,
+            "count": len(tabs),
+            "active_index": active_idx,
+        }
+
+
+@app.post("/api/tabs/switch")
+async def switch_browser_tab(payload: Dict[str, Any] = Body(...)):
+    """Switch active tab focus by 0-based index or matching title/URL."""
+    async with get_browser_lock():
+        tab_index = payload.get("tab_index") or payload.get("index")
+        target = payload.get("target")
+        res = await executor.switch_tab(tab_index=tab_index, target=target)
+        return res
+
+
+@app.post("/api/tabs/new")
+async def open_new_browser_tab(payload: Dict[str, Any] = Body(default={})):
+    """Open a new browser tab with optional destination URL."""
+    async with get_browser_lock():
+        url = payload.get("url")
+        res = await executor.new_tab(url=url)
+        return res
+
+
+@app.post("/api/tabs/close")
+async def close_browser_tab(payload: Dict[str, Any] = Body(default={})):
+    """Close an open browser tab by index, refocusing on remaining tabs."""
+    async with get_browser_lock():
+        tab_index = payload.get("tab_index") or payload.get("index")
+        target = payload.get("target")
+        res = await executor.close_tab(tab_index=tab_index, target=target)
+        return res
+
+
+@app.get("/api/profile/status")
+async def get_profile_status():
+    """Return persistent user profile configuration, cookie backup status, and storage directory."""
+    profile_dir = Path(executor.user_data_dir)
+    cookie_file = profile_dir / "cookies.json"
+    cookie_count = 0
+    if cookie_file.exists():
+        try:
+            import json
+            with open(cookie_file, "r", encoding="utf-8") as f:
+                c_data = json.load(f)
+                cookie_count = len(c_data) if isinstance(c_data, list) else 0
+        except Exception:
+            pass
+    return {
+        "persistent_profile": getattr(executor, "persistent_profile", True),
+        "user_data_dir": str(profile_dir),
+        "cookies_saved": cookie_file.exists(),
+        "saved_cookie_count": cookie_count,
+    }
+
+
+@app.post("/api/profile/clear")
+async def clear_profile_data():
+    """Clear cookies and reset persistent profile session cache."""
+    async with get_browser_lock():
+        success = await executor.clear_profile()
+        return {"success": success, "message": "Browser profile cookies and session cache cleared"}
+
+
+# =====================================================================
 # EXTENSION IN-TAB EXECUTION ENDPOINTS (NO EXTRA CHROMIUM WINDOW)
 # =====================================================================
+
 
 @app.post("/api/extension/start")
 async def start_extension_session(request: AgentRunRequest):

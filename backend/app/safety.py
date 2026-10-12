@@ -96,7 +96,16 @@ class SafetyGuard:
     ) -> SafetyCheckResult:
         """Evaluate a proposed action for destructive impact or policy violations."""
         # 1. Non-destructive actions are generally safe
-        if action.action_type in (ActionType.NAVIGATE, ActionType.WAIT, ActionType.SCROLL, ActionType.EXTRACT):
+        if action.action_type in (
+            ActionType.NAVIGATE,
+            ActionType.WAIT,
+            ActionType.SCROLL,
+            ActionType.EXTRACT,
+            ActionType.SWITCH_TAB,
+            ActionType.NEW_TAB,
+            ActionType.CLOSE_TAB,
+        ):
+
             # Check target URL for restricted protocols
             if action.url:
                 clean_url = action.url.lower().replace("\\", "/")

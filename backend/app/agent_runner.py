@@ -510,8 +510,14 @@ class ControlledAgentRunner:
                 state.current_step += 1
                 step_idx = state.current_step
 
+                # Refresh active_page from executor in case previous action opened a popup or new tab
+                if hasattr(self.executor, "current_page") and self.executor.current_page:
+                    if not self.executor.current_page.is_closed():
+                        active_page = self.executor.current_page
+
                 # A0. Pre-observation CAPTCHA / challenge handling
                 if hasattr(self.executor, "detect_captcha") and hasattr(self.executor, "handle_captcha"):
+
                     try:
                         c_check = self.executor.detect_captcha(active_page)
                         if asyncio.iscoroutine(c_check):

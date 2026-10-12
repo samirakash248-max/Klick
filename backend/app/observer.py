@@ -139,10 +139,26 @@ class PlaywrightObserver:
             for el in raw_elements
         ]
 
+        open_tabs = []
+        active_idx = 0
+        if active_page and active_page.context:
+            for i, p in enumerate(active_page.context.pages):
+                if not p.is_closed():
+                    is_active = (p == active_page)
+                    if is_active:
+                        active_idx = i
+                    open_tabs.append({
+                        "index": i,
+                        "url": p.url or "",
+                        "is_active": is_active,
+                    })
+
         return {
             "url": url,
             "title": title,
             "elements": elements_list,
+            "open_tabs": open_tabs,
+            "active_tab_index": active_idx,
         }
 
     async def observe(self, page: Optional[Page] = None) -> PageObservation:
@@ -157,6 +173,22 @@ class PlaywrightObserver:
                 return PageObservation(url="about:blank", title="Closed", interactive_elements=[])
             url = active_page.url
             title = await active_page.title()
+
+            # Extract open tabs
+            open_tabs = []
+            active_idx = 0
+            if active_page and active_page.context:
+                for i, p in enumerate(active_page.context.pages):
+                    if not p.is_closed():
+                        is_active = (p == active_page)
+                        if is_active:
+                            active_idx = i
+                        open_tabs.append({
+                            "index": i,
+                            "url": p.url or "",
+                            "title": p.url or f"Tab {i + 1}",
+                            "is_active": is_active,
+                        })
 
             # Extract visible interactive elements
             raw_elements = await self._query_visible_dom_elements(active_page)
@@ -174,12 +206,15 @@ class PlaywrightObserver:
                 dom_summary=dom_summary,
                 interactive_elements=interactive_elements,
                 page_text_snippet=snippet,
+                open_tabs=open_tabs,
+                active_tab_index=active_idx,
             )
         except Exception as exc:
             if "Target page, context or browser has been closed" in str(exc) or "TargetClosedError" in str(type(exc)) or (page and getattr(page, "is_closed", lambda: False)()):
                 logger.warning("Browser page was closed during observation.")
                 return PageObservation(url="about:blank", title="Browser Closed", interactive_elements=[])
             raise
+
 
     async def _query_visible_dom_elements(self, page: Page) -> List[Dict[str, Any]]:
         """Execute in-page JavaScript to extract visible interactive elements and data-agent-ids."""

@@ -365,6 +365,27 @@ async function executeDomAction(action) {
       window.location.href = action.url;
     }
     return { success: true, message: `Navigating to ${action.url}` };
+  } else if (actType === "new_tab") {
+    try {
+      chrome.runtime.sendMessage({ action: "new_tab", url: action.url || "about:blank" });
+    } catch {
+      window.open(action.url || "about:blank", "_blank");
+    }
+    return { success: true, message: `Opened new tab ${action.url || ""}` };
+  } else if (actType === "switch_tab") {
+    try {
+      chrome.runtime.sendMessage({ action: "switch_tab", tabIndex: action.tab_index });
+    } catch (e) {
+      // fallback
+    }
+    return { success: true, message: `Switched tab to index ${action.tab_index ?? ""}` };
+  } else if (actType === "close_tab") {
+    try {
+      chrome.runtime.sendMessage({ action: "close_tab" });
+    } catch (e) {
+      window.close();
+    }
+    return { success: true, message: "Closed current tab" };
   }
 
   return { success: true, message: `Action ${actType} processed` };
