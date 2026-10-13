@@ -70,12 +70,17 @@ from .schemas import (
     ExecutionResult,
     ExtensionStepRequest,
     ExtensionStepResponse,
+    MacroDefinition,
+    MacroReplayRequest,
+    MacroReplayResult,
+    MacroStep,
     ObservationResponse,
     PageObservation,
     RunStatus,
     StepRecord,
     StopResponse,
 )
+from .macros import macro_manager
 
 # Concurrency lock to serialize all active browser operations
 _browser_lock: Optional[asyncio.Lock] = None
@@ -600,6 +605,76 @@ async def clear_profile_data():
     async with get_browser_lock():
         success = await executor.clear_profile()
         return {"success": success, "message": "Browser profile cookies and session cache cleared"}
+
+
+# =====================================================================
+# DETERMINISTIC RPA MACROS ENDPOINTS
+# =====================================================================
+
+@app.get("/api/macros")
+async def get_all_macros():
+    """List all available deterministic RPA macros."""
+    return macro_manager.list_macros()
+
+
+@app.get("/api/macros/{macro_id}")
+async def get_macro_by_id(macro_id: str):
+    """Retrieve details for a specific saved macro."""
+    macro = macro_manager.get_macro(macro_id)
+    if not macro:
+        raise HTTPException(status_code=404, detail=f"Macro '{macro_id}' not found")
+    return macro
+
+
+@app.post("/api/macros")
+async def save_custom_macro(macro: MacroDefinition):
+    """Create or update a deterministic macro definition."""
+    saved = macro_manager.save_macro(macro)
+    return saved
+
+
+@app.delete("/api/macros/{macro_id}")
+async def remove_macro(macro_id: str):
+    """Delete a macro definition from disk."""
+    success = macro_manager.delete_macro(macro_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Macro '{macro_id}' not found")
+    return {"success": True, "message": f"Macro '{macro_id}' deleted"}
+
+
+@app.post("/api/macros/record-from-run")
+async def record_macro_from_session(payload: Dict[str, Any] = Body(...)):
+    """Convert the last completed or active agent session history into a deterministic macro."""
+    name = payload.get("name") or "New Recorded Macro"
+    description = payload.get("description") or ""
+    query_param = payload.get("parameterize_query")
+
+    state = agent_loop.current_state
+    if not state or not state.history:
+        raise HTTPException(status_code=400, detail="No active or completed agent run history available to record as macro")
+
+    macro = macro_manager.record_from_run(
+        run_state=state,
+        name=name,
+        description=description,
+        parameterize_query=query_param,
+    )
+    return macro
+
+
+@app.post("/api/macros/replay", response_model=MacroReplayResult)
+async def execute_macro_replay(request: MacroReplayRequest):
+    """Deterministically replay a saved macro with 0ms AI inference latency, with adaptive agent fallback."""
+    async with get_browser_lock():
+        res = await macro_manager.replay_macro(
+            macro_id=request.macro_id,
+            parameters=request.parameters,
+            executor=executor,
+            agent_runner=agent_loop,
+            fallback_to_agent=request.fallback_to_agent,
+            event_manager=event_manager,
+        )
+        return res
 
 
 # =====================================================================

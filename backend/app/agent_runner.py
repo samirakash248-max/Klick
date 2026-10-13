@@ -475,10 +475,14 @@ class ControlledAgentRunner:
             run_id=run_id,
         )
 
-        # Track consecutive repeated actions on unchanged pages
+        # Track consecutive repeated actions, stagnation, and self-healing attempts
         last_action_signature: Optional[str] = None
         last_page_fingerprint: Optional[str] = None
         consecutive_identical_count = 0
+        consecutive_stagnant_steps = 0
+        self_healing_attempts = 0
+        max_self_healing_attempts = 3
+        active_recovery_hint: Optional[str] = None
         consecutive_failures = 0
         stop_reason: Optional[StopReason] = None
         completion_verified = False
@@ -642,6 +646,8 @@ class ControlledAgentRunner:
                             f"[Context: Previous actions executed: {recent_actions_summary}. "
                             "If the goal has already been achieved by previous actions or current page state, select action 'finish'.]"
                         )
+                    if active_recovery_hint:
+                        goal_for_step = f"{goal_for_step}\n\n[RECOVERY GUIDANCE]: {active_recovery_hint}"
 
                     response = await self.model_client.get_next_action(
                         goal=goal_for_step,
@@ -679,72 +685,155 @@ class ControlledAgentRunner:
 
                 # D. Grounding Validation
                 if not is_action_grounded(proposed_action, observation):
-                    stop_reason = StopReason.UNGROUNDED_SELECTOR
-                    state.status = RunStatus.FAILED
-                    state.error = (
-                        f"Action selector '{proposed_action.selector}' is not grounded "
-                        "in current page observation elements or DOM summary."
-                    )
-                    step_rec = self._record_trajectory_step(
-                        run_id=run_id,
-                        task_id=task_id,
-                        step_number=step_idx,
-                        goal=request.goal,
-                        observation=observation,
-                        action=proposed_action,
-                        grounding_valid=False,
-                        status=RunStatus.FAILED,
-                        stop_reason=StopReason.UNGROUNDED_SELECTOR,
-                        error=state.error,
-                    )
-                    if step_rec:
-                        logged_steps.append(step_rec)
-                    await self.events.emit(
-                        EventType.ERROR,
-                        state.error,
-                        {"step": step_idx, "action": proposed_action.model_dump()},
-                        run_id=run_id,
-                    )
-                    break
+                    if self_healing_attempts < max_self_healing_attempts:
+                        self_healing_attempts += 1
+                        state.self_healing_count += 1
+                        active_recovery_hint = (
+                            f"Target selector '{proposed_action.selector}' is not present on the active page. "
+                            f"Choose from visible elements: {[e.id or e.selector for e in observation.interactive_elements[:8]]}"
+                        )
+                        state.recovery_notes.append(f"Self-healing: selector '{proposed_action.selector}' ungrounded, reprompting.")
+                        await self.events.emit(
+                            EventType.SELF_HEALING_RECOVERY,
+                            f"Self-Healing (Attempt {self_healing_attempts}): Selector '{proposed_action.selector}' ungrounded. Reprompting agent.",
+                            {"attempt": self_healing_attempts, "step": step_idx, "type": "ungrounded_selector"},
+                            run_id=run_id,
+                        )
+                        if hasattr(self.executor, "dismiss_overlays"):
+                            await self.executor.dismiss_overlays()
+                        continue
+                    else:
+                        stop_reason = StopReason.UNGROUNDED_SELECTOR
+                        state.status = RunStatus.FAILED
+                        state.error = (
+                            f"Action selector '{proposed_action.selector}' is not grounded "
+                            "in current page observation elements or DOM summary."
+                        )
+                        step_rec = self._record_trajectory_step(
+                            run_id=run_id,
+                            task_id=task_id,
+                            step_number=step_idx,
+                            goal=request.goal,
+                            observation=observation,
+                            action=proposed_action,
+                            grounding_valid=False,
+                            status=RunStatus.FAILED,
+                            stop_reason=StopReason.UNGROUNDED_SELECTOR,
+                            error=state.error,
+                        )
+                        if step_rec:
+                            logged_steps.append(step_rec)
+                        await self.events.emit(
+                            EventType.ERROR,
+                            state.error,
+                            {"step": step_idx, "action": proposed_action.model_dump()},
+                            run_id=run_id,
+                        )
+                        break
 
-                # E. Repeated-Action Stuck Detection
+                # E. Repeated-Action Stuck & Stagnation Detection with Multi-Tiered Self-Healing
                 action_signature = f"{proposed_action.action_type.value}|{proposed_action.selector}|{proposed_action.text}|{proposed_action.url}"
-                if action_signature == last_action_signature and page_fingerprint == last_page_fingerprint:
+                is_identical_action = (action_signature == last_action_signature and page_fingerprint == last_page_fingerprint)
+                is_stagnant_page = (page_fingerprint == last_page_fingerprint and proposed_action.action_type not in (ActionType.WAIT, ActionType.SCROLL))
+
+                if is_identical_action:
                     consecutive_identical_count += 1
                 else:
                     consecutive_identical_count = 1
 
+                if is_stagnant_page:
+                    consecutive_stagnant_steps += 1
+                else:
+                    consecutive_stagnant_steps = 0
+                    active_recovery_hint = None
+
                 last_action_signature = action_signature
                 last_page_fingerprint = page_fingerprint
 
-                if consecutive_identical_count >= self.stuck_threshold:
-                    stop_reason = StopReason.STUCK_REPEATED_ACTION
-                    state.status = RunStatus.FAILED
-                    state.error = (
-                        f"Stuck loop detected: Action '{proposed_action.action_type.value}' "
-                        f"repeated {consecutive_identical_count} times without meaningful page change."
-                    )
-                    step_rec = self._record_trajectory_step(
-                        run_id=run_id,
-                        task_id=task_id,
-                        step_number=step_idx,
-                        goal=request.goal,
-                        observation=observation,
-                        action=proposed_action,
-                        grounding_valid=True,
-                        status=RunStatus.FAILED,
-                        stop_reason=StopReason.STUCK_REPEATED_ACTION,
-                        error=state.error,
-                    )
-                    if step_rec:
-                        logged_steps.append(step_rec)
-                    await self.events.emit(
-                        EventType.ERROR,
-                        state.error,
-                        {"step": step_idx, "signature": action_signature},
-                        run_id=run_id,
-                    )
-                    break
+                if consecutive_identical_count >= 2 or consecutive_stagnant_steps >= 2:
+                    if self_healing_attempts < max_self_healing_attempts:
+                        self_healing_attempts += 1
+                        state.self_healing_count += 1
+
+                        if self_healing_attempts == 1:
+                            # Tier 1: Modal / Overlay Dismissal (Escape + close buttons)
+                            if hasattr(self.executor, "dismiss_overlays"):
+                                await self.executor.dismiss_overlays()
+                            active_recovery_hint = (
+                                f"Action '{proposed_action.action_type.value}' had no effect on page state. "
+                                "Possible blocking overlay or modal was dismissed (Escape pressed). "
+                                "Do NOT repeat this exact action. Try an alternative button, link, or scroll."
+                            )
+                            state.recovery_notes.append(f"Self-healing (Attempt 1): Dismissed overlays for stagnant action '{proposed_action.action_type.value}'.")
+                            await self.events.emit(
+                                EventType.SELF_HEALING_RECOVERY,
+                                "Self-Healing (Tier 1): Dismissed potential overlays, reprompting agent.",
+                                {"attempt": 1, "step": step_idx, "action": proposed_action.action_type.value},
+                                run_id=run_id,
+                            )
+                            continue
+
+                        elif self_healing_attempts == 2:
+                            # Tier 2: Backtracking Navigation
+                            if hasattr(self.executor, "go_back"):
+                                await self.executor.go_back()
+                            active_recovery_hint = (
+                                "Stagnant loop detected: Backtracked to previous page. "
+                                f"Do NOT repeat prior action '{proposed_action.action_type.value}'. Explore an alternate path."
+                            )
+                            state.recovery_notes.append("Self-healing (Attempt 2): Backtracked to previous page via go_back().")
+                            await self.events.emit(
+                                EventType.SELF_HEALING_RECOVERY,
+                                "Self-Healing (Tier 2): Backtracked to previous page to escape dead-end loop.",
+                                {"attempt": 2, "step": step_idx, "type": "backtracking_go_back"},
+                                run_id=run_id,
+                            )
+                            continue
+
+                        elif self_healing_attempts == 3:
+                            # Tier 3: Viewport Scrolling & Discovery
+                            if hasattr(self.executor, "scroll"):
+                                await self.executor.scroll(delta_y=600)
+                            active_recovery_hint = (
+                                "Page state is stagnant: Scrolled down 600px to discover new elements. "
+                                "Choose a newly visible element to make progress."
+                            )
+                            state.recovery_notes.append("Self-healing (Attempt 3): Scrolled viewport down 600px.")
+                            await self.events.emit(
+                                EventType.SELF_HEALING_RECOVERY,
+                                "Self-Healing (Tier 3): Scrolled page to discover fresh elements.",
+                                {"attempt": 3, "step": step_idx, "type": "scroll_exploration"},
+                                run_id=run_id,
+                            )
+                            continue
+                    else:
+                        stop_reason = StopReason.STUCK_REPEATED_ACTION
+                        state.status = RunStatus.FAILED
+                        state.error = (
+                            f"Stuck loop detected: Action '{proposed_action.action_type.value}' "
+                            f"repeated without progress across {self_healing_attempts} self-healing attempts."
+                        )
+                        step_rec = self._record_trajectory_step(
+                            run_id=run_id,
+                            task_id=task_id,
+                            step_number=step_idx,
+                            goal=request.goal,
+                            observation=observation,
+                            action=proposed_action,
+                            grounding_valid=True,
+                            status=RunStatus.FAILED,
+                            stop_reason=StopReason.STUCK_REPEATED_ACTION,
+                            error=state.error,
+                        )
+                        if step_rec:
+                            logged_steps.append(step_rec)
+                        await self.events.emit(
+                            EventType.ERROR,
+                            state.error,
+                            {"step": step_idx, "signature": action_signature},
+                            run_id=run_id,
+                        )
+                        break
 
                 # F. Safety Guardrail Evaluation & Human-In-The-Loop Approval
                 decision = classify_action_safety(

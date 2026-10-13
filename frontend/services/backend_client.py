@@ -231,3 +231,97 @@ class BackendClient:
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
+    # =========================================================================
+    # DETERMINISTIC RPA MACROS
+    # =========================================================================
+
+    def get_macros(self) -> List[Dict[str, Any]]:
+        """Fetch all available deterministic RPA macros."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/macros")
+                if res.status_code == 200:
+                    return res.json()
+                return []
+        except Exception:
+            return []
+
+    def get_macro(self, macro_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch specific macro by ID."""
+        try:
+            with self._client() as client:
+                res = client.get(f"/api/macros/{macro_id}")
+                if res.status_code == 200:
+                    return res.json()
+                return None
+        except Exception:
+            return None
+
+    def save_macro(self, macro_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Save or update a macro definition."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/macros", json=macro_data)
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def delete_macro(self, macro_id: str) -> bool:
+        """Delete a macro by ID."""
+        try:
+            with self._client() as client:
+                res = client.delete(f"/api/macros/{macro_id}")
+                return res.status_code == 200
+        except Exception:
+            return False
+
+    def record_macro_from_run(
+        self,
+        name: str,
+        description: str = "",
+        parameterize_query: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Record the current or last active session into a deterministic macro."""
+        try:
+            with self._client() as client:
+                res = client.post(
+                    "/api/macros/record-from-run",
+                    json={
+                        "name": name,
+                        "description": description,
+                        "parameterize_query": parameterize_query,
+                    },
+                )
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def replay_macro(
+        self,
+        macro_id: str,
+        parameters: Optional[Dict[str, Any]] = None,
+        fallback_to_agent: bool = True,
+    ) -> Dict[str, Any]:
+        """Deterministically replay a macro with 0ms AI inference latency."""
+        try:
+            with self._client() as client:
+                res = client.post(
+                    "/api/macros/replay",
+                    json={
+                        "macro_id": macro_id,
+                        "parameters": parameters or {},
+                        "fallback_to_agent": fallback_to_agent,
+                    },
+                    timeout=60.0,
+                )
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+

@@ -12,7 +12,7 @@ Defines the shared contracts for:
 from datetime import datetime, timezone
 from enum import Enum
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -28,6 +28,7 @@ class ActionType(str, Enum):
     SWITCH_TAB = "switch_tab"
     NEW_TAB = "new_tab"
     CLOSE_TAB = "close_tab"
+    GO_BACK = "go_back"
     FINISH = "finish"
     FAIL = "fail"
 
@@ -191,6 +192,8 @@ class BrowserAction(BaseModel):
                     act_str = "new_tab"
                 elif act_str in ("close_tab", "close-tab", "close_current_tab"):
                     act_str = "close_tab"
+                elif act_str in ("go_back", "back", "navigate_back", "history_back"):
+                    act_str = "go_back"
                 data["action_type"] = act_str
 
             # Support tab_index extraction from common aliases
@@ -480,6 +483,8 @@ class AgentRunState(BaseModel):
     history: List[StepRecord] = Field(default_factory=list, description="Step execution history")
     error: Optional[str] = None
     final_output: Optional[str] = None
+    self_healing_count: int = Field(default=0, description="Total self-healing recovery actions performed")
+    recovery_notes: List[str] = Field(default_factory=list, description="Self-healing recovery notes and feedback")
 
 
 class ExecuteActionRequest(BaseModel):
@@ -543,5 +548,79 @@ class ExtensionStepResponse(BaseModel):
     final_output: Optional[str] = None
     safety_passed: bool = True
     safety_reason: Optional[str] = None
+
+
+# =========================================================================
+# DETERMINISTIC RPA MACROS
+# =========================================================================
+
+class MacroStep(BaseModel):
+    """Atomic step in a deterministic RPA macro."""
+    action_type: Union[ActionType, str] = Field(..., description="Action type to perform")
+    target: Optional[str] = Field(default=None, description="Target data-agent-id or identifier")
+    selector: Optional[str] = Field(default=None, description="CSS or text selector")
+    text: Optional[str] = Field(default=None, description="Text with optional {{param}} placeholders")
+    url: Optional[str] = Field(default=None, description="URL with optional {{param}} placeholders")
+    key: Optional[str] = Field(default=None, description="Key name to press")
+    seconds: Optional[float] = Field(default=None, description="Seconds to wait")
+    scroll_delta_y: Optional[int] = Field(default=None, description="Scroll delta")
+    tab_index: Optional[int] = Field(default=None, description="Tab index for switch/close")
+    description: Optional[str] = Field(default="", description="Description of step")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_step(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "action" in data and "action_type" not in data:
+                data["action_type"] = data["action"]
+            if "wait_seconds" in data and "seconds" not in data:
+                data["seconds"] = data["wait_seconds"]
+        return data
+
+
+class MacroDefinition(BaseModel):
+    """Saved deterministic RPA workflow recipe."""
+    id: str = Field(..., description="Unique macro ID")
+    name: str = Field(..., description="Human-readable name")
+    description: Optional[str] = Field(default="", description="Macro goal or purpose")
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="ISO timestamp of creation"
+    )
+    parameters: List[str] = Field(
+        default_factory=list,
+        description="List of detected parameter names e.g. ['query', 'username']"
+    )
+    steps: List[MacroStep] = Field(
+        default_factory=list,
+        description="Sequential list of atomic actions"
+    )
+    default_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Default values for parameters"
+    )
+
+
+class MacroReplayRequest(BaseModel):
+    """Payload to deterministically execute a saved macro."""
+    macro_id: str = Field(..., description="Target macro identifier")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Values for {{param}} placeholders")
+    fallback_to_agent: bool = Field(default=True, description="Fallback to LLM agent if a step fails")
+
+
+class MacroReplayResult(BaseModel):
+    """Execution telemetry for macro replay."""
+    macro_id: str
+    macro_name: str
+    success: bool
+    steps_executed: int
+    total_steps: int
+    duration_ms: float = 0.0
+    message: str
+    error: Optional[str] = None
+    step_results: List[Dict[str, Any]] = Field(default_factory=list)
+    fallback_triggered: bool = False
+    agent_run_id: Optional[str] = None
+
 
 

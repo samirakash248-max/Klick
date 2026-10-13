@@ -104,6 +104,7 @@ class SafetyGuard:
             ActionType.SWITCH_TAB,
             ActionType.NEW_TAB,
             ActionType.CLOSE_TAB,
+            ActionType.GO_BACK,
         ):
 
             # Check target URL for restricted protocols

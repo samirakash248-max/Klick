@@ -24,6 +24,8 @@ class EventType(str, Enum):
     STEP_COMPLETED = "step_completed"
     RUN_FINISHED = "run_finished"
     LOG_MESSAGE = "log_message"
+    SELF_HEALING_RECOVERY = "self_healing_recovery"
+    MACRO_EXECUTION = "macro_execution"
     ERROR = "error"
 
 

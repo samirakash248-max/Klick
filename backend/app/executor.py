@@ -893,6 +893,8 @@ class PlaywrightExecutor:
                 result = await self._execute_new_tab(url or target)
             elif raw_action in ("close_tab", "close-tab", "close_current_tab"):
                 result = await self._execute_close_tab(tab_index, target)
+            elif raw_action in ("go_back", "back", "navigate_back", "history_back"):
+                result = await self._execute_go_back(page)
             elif raw_action == "extract":
                 if url:
                     result = await self._execute_navigate(page, url)
@@ -1551,6 +1553,41 @@ class PlaywrightExecutor:
             message=f"Closed tab '{closed_url}'. Active tab is now #{new_active_idx}",
         )
 
+    async def _execute_go_back(self, page: Page) -> ExecutionResult:
+        """Navigate backwards in session history on current active page."""
+        start_time = time.perf_counter()
+        target_page = page or self.current_page
+        if not target_page or target_page.is_closed():
+            return ExecutionResult(
+                success=False,
+                action_type=ActionType.GO_BACK,
+                action="go_back",
+                message="No active page available to navigate back",
+                error="No active page",
+            )
+        try:
+            prev_url = target_page.url
+            await target_page.go_back(timeout=DEFAULT_ACTION_TIMEOUT_MS)
+            duration = (time.perf_counter() - start_time) * 1000
+            current_url = target_page.url
+            return ExecutionResult(
+                success=True,
+                action_type=ActionType.GO_BACK,
+                action="go_back",
+                message=f"Navigated back from '{prev_url}' to '{current_url}'",
+                duration_ms=round(duration, 2),
+            )
+        except Exception as exc:
+            duration = (time.perf_counter() - start_time) * 1000
+            return ExecutionResult(
+                success=False,
+                action_type=ActionType.GO_BACK,
+                action="go_back",
+                message=f"Failed to navigate back: {exc}",
+                error=str(exc),
+                duration_ms=round(duration, 2),
+            )
+
     # Convenience helper methods
     async def click(self, target: str) -> ExecutionResult:
         return await self.execute({"action": "click", "target": target})
@@ -1575,6 +1612,41 @@ class PlaywrightExecutor:
 
     async def close_tab(self, tab_index: Optional[int] = None, target: Optional[str] = None) -> ExecutionResult:
         return await self.execute({"action": "close_tab", "tab_index": tab_index, "target": target})
+
+    async def go_back(self) -> ExecutionResult:
+        return await self.execute({"action": "go_back"})
+
+    async def dismiss_overlays(self) -> ExecutionResult:
+        """Attempt to dismiss intrusive modal overlays, popups, or dialogs."""
+        start_time = time.perf_counter()
+        target_page = self.current_page
+        if target_page and not target_page.is_closed():
+            try:
+                await target_page.keyboard.press("Escape")
+            except Exception:
+                pass
+            for sel in [
+                "button[aria-label*='close' i]",
+                "button[aria-label*='dismiss' i]",
+                ".modal-close",
+                "[data-dismiss='modal']",
+                "button.close",
+            ]:
+                try:
+                    btn = target_page.locator(sel).first
+                    if await btn.is_visible(timeout=150):
+                        await btn.click(timeout=400)
+                        break
+                except Exception:
+                    pass
+        duration = (time.perf_counter() - start_time) * 1000
+        return ExecutionResult(
+            success=True,
+            action_type=ActionType.PRESS_KEY,
+            action="dismiss_overlays",
+            message="Attempted modal/popup overlay dismissal",
+            duration_ms=round(duration, 2),
+        )
 
     async def close(self) -> None:
         """Tear down browser session, save cookies, and release resources cleanly."""

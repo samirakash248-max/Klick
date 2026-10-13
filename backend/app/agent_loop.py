@@ -124,7 +124,14 @@ class AgentLoop:
                     )
                 )
 
-            # 2. Main agent loop
+            # 2. Main agent loop with stagnation detection & self-healing
+            last_signature: Optional[str] = None
+            last_url: Optional[str] = None
+            consecutive_stagnant_count = 0
+            self_healing_attempts = 0
+            max_self_healing = 3
+            recovery_hint: Optional[str] = None
+
             while state.current_step < state.max_steps and not self._stop_requested:
                 state.current_step += 1
                 step_idx = state.current_step
@@ -190,8 +197,9 @@ class AgentLoop:
                     run_id=run_id,
                 )
 
+                goal_text = f"{request.goal}\n[RECOVERY GUIDANCE]: {recovery_hint}" if recovery_hint else request.goal
                 response = await self.model_client.get_next_action(
-                    goal=request.goal,
+                    goal=goal_text,
                     observation=observation,
                     step_number=step_idx,
                     max_steps=state.max_steps,
@@ -248,6 +256,59 @@ class AgentLoop:
                     else:
                         response.action.action_type = ActionType.FINISH
                         response.action.description = f"Search for '{query_term or 'query'}' completed and results are displayed"
+
+                # Check cyclic stagnation
+                action_sig = f"{response.action.action_type.value}|{response.action.target}|{response.action.text}"
+                curr_url = page.url or ""
+                if action_sig == last_signature and curr_url == last_url:
+                    consecutive_stagnant_count += 1
+                else:
+                    consecutive_stagnant_count = 0
+                    recovery_hint = None
+
+                last_signature = action_sig
+                last_url = curr_url
+
+                if consecutive_stagnant_count >= 2:
+                    if self_healing_attempts < max_self_healing:
+                        self_healing_attempts += 1
+                        state.self_healing_count += 1
+                        if self_healing_attempts == 1:
+                            if hasattr(self.executor, "dismiss_overlays"):
+                                await self.executor.dismiss_overlays()
+                            recovery_hint = f"Action '{response.action.action_type.value}' had no effect. Dismissed possible modal overlays (Escape). Try an alternate button or link."
+                            state.recovery_notes.append("Self-healing: dismissed blocking overlays on stagnation.")
+                            await event_manager.emit(
+                                EventType.SELF_HEALING_RECOVERY,
+                                "Self-Healing: Dismissed potential overlays, reprompting agent.",
+                                {"attempt": 1, "step": step_idx},
+                                run_id=run_id,
+                            )
+                            continue
+                        elif self_healing_attempts == 2:
+                            if hasattr(self.executor, "go_back"):
+                                await self.executor.go_back()
+                            recovery_hint = "Stagnant loop detected. Backtracked to previous page. Choose an alternative link."
+                            state.recovery_notes.append("Self-healing: backtracked via go_back().")
+                            await event_manager.emit(
+                                EventType.SELF_HEALING_RECOVERY,
+                                "Self-Healing: Backtracked to previous page to escape stagnation.",
+                                {"attempt": 2, "step": step_idx},
+                                run_id=run_id,
+                            )
+                            continue
+                        elif self_healing_attempts == 3:
+                            if hasattr(self.executor, "scroll"):
+                                await self.executor.scroll(delta_y=600)
+                            recovery_hint = "Stagnation detected. Scrolled page down 600px to uncover fresh elements."
+                            state.recovery_notes.append("Self-healing: scrolled viewport 600px.")
+                            await event_manager.emit(
+                                EventType.SELF_HEALING_RECOVERY,
+                                "Self-Healing: Scrolled page to discover fresh elements.",
+                                {"attempt": 3, "step": step_idx},
+                                run_id=run_id,
+                            )
+                            continue
 
                 # D. Safety check on proposed action
                 safety_check = self.safety.evaluate_action(response.action, observation)

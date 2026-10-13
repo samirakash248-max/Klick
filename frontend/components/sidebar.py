@@ -154,6 +154,71 @@ def render_sidebar(backend_client: BackendClient, ollama_service: OllamaService)
                 st.toast("Browser profile session cache and cookies cleared.")
                 st.rerun()
 
+        # 4. Deterministic RPA & Macros Panel
+        with st.expander("Deterministic Macros & RPA", expanded=False):
+            st.markdown(
+                """
+                <div style="font-size: 0.8rem; color: #64748b; margin-bottom: 0.5rem;">
+                    Replay workflows deterministically with 0ms AI inference latency.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            macros = backend_client.get_macros()
+            if macros:
+                macro_names = {m.get("id"): f"{m.get('name', 'Macro')} ({len(m.get('steps', []))} steps)" for m in macros}
+                sel_macro_id = st.selectbox(
+                    "Select Macro",
+                    options=list(macro_names.keys()),
+                    format_func=lambda x: macro_names.get(x, x),
+                    key="sidebar_macro_select",
+                )
+                selected_macro = next((m for m in macros if m.get("id") == sel_macro_id), None)
+                if selected_macro:
+                    st.caption(selected_macro.get("description", ""))
+                    params = dict(selected_macro.get("default_params", {}))
+                    param_keys = selected_macro.get("parameters", [])
+                    user_params = {}
+                    for p in param_keys:
+                        user_params[p] = st.text_input(
+                            f"Parameter: {p}",
+                            value=str(params.get(p, "")),
+                            key=f"macro_param_{sel_macro_id}_{p}",
+                        )
+
+                    fallback_ai = st.checkbox("AI Fallback if UI shifted", value=True, key="macro_fallback_cb")
+
+                    if st.button("⚡ Replay Deterministic Macro", key="sidebar_replay_macro_btn", use_container_width=True, type="primary"):
+                        with st.spinner("Replaying macro actions..."):
+                            replay_res = backend_client.replay_macro(
+                                macro_id=sel_macro_id,
+                                parameters=user_params,
+                                fallback_to_agent=fallback_ai,
+                            )
+                        if replay_res.get("success"):
+                            st.success(f"Macro completed ({replay_res.get('steps_executed')}/{replay_res.get('total_steps')} steps in {replay_res.get('duration_ms')}ms)")
+                        else:
+                            st.warning(f"Replay paused: {replay_res.get('message')}")
+            else:
+                st.caption("No macros found.")
+
+            with st.popover("Save Last Run as Macro"):
+                rec_name = st.text_input("Macro Name", placeholder="e.g. Daily Search", key="pop_macro_name")
+                rec_desc = st.text_input("Description", placeholder="e.g. Search and play video", key="pop_macro_desc")
+                rec_query = st.text_input("Parameterize String (Optional)", placeholder="e.g. casetoo", key="pop_macro_query")
+                if st.button("Save Macro", key="pop_macro_save_btn", use_container_width=True):
+                    if rec_name:
+                        rec_res = backend_client.record_macro_from_run(
+                            name=rec_name,
+                            description=rec_desc,
+                            parameterize_query=rec_query,
+                        )
+                        if rec_res.get("id"):
+                            st.toast(f"Saved macro '{rec_name}' successfully!")
+                            st.rerun()
+                        else:
+                            st.error(rec_res.get("error", "Failed to save macro"))
+
         # 4. Active Run Flow Control
         is_running = st.session_state.get("is_running", False)
         if is_running:
