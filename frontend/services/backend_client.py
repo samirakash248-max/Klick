@@ -324,4 +324,64 @@ class BackendClient:
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
+    # =========================================================================
+    # STRUCTURED DATA EXPORTS
+    # =========================================================================
+
+    def get_exports(self) -> List[Dict[str, Any]]:
+        """Fetch list of all structured data exports."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/exports")
+                if res.status_code == 200:
+                    return res.json()
+                return []
+        except Exception:
+            return []
+
+    def export_data(
+        self,
+        target: Optional[str] = None,
+        format: str = "csv",
+        filename: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Trigger structured table or list data export on active page."""
+        try:
+            with self._client() as client:
+                res = client.post(
+                    "/api/export",
+                    json={"target": target, "format": format, "filename": filename},
+                )
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    # =========================================================================
+    # HYBRID MODEL ROUTING
+    # =========================================================================
+
+    def get_model_routes(self) -> Dict[str, Any]:
+        """Fetch model routing configuration, active tier, and latency telemetry."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/models/routes")
+                if res.status_code == 200:
+                    return res.json()
+                return {"active_tier": "auto", "tiers": []}
+        except Exception:
+            return {"active_tier": "auto", "tiers": []}
+
+    def set_model_route(self, tier: str) -> Dict[str, Any]:
+        """Switch active model routing tier ('local_fast', 'cloud_turbo', 'auto')."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/models/route", json={"tier": tier})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
 

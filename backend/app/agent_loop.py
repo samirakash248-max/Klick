@@ -14,6 +14,7 @@ Jointly owned by: AI Engineer & Browser Automation Engineer
 
 import asyncio
 from datetime import datetime, timezone
+import inspect
 import os
 import uuid
 from typing import Optional
@@ -275,7 +276,9 @@ class AgentLoop:
                         state.self_healing_count += 1
                         if self_healing_attempts == 1:
                             if hasattr(self.executor, "dismiss_overlays"):
-                                await self.executor.dismiss_overlays()
+                                _res = self.executor.dismiss_overlays()
+                                if inspect.isawaitable(_res):
+                                    await _res
                             recovery_hint = f"Action '{response.action.action_type.value}' had no effect. Dismissed possible modal overlays (Escape). Try an alternate button or link."
                             state.recovery_notes.append("Self-healing: dismissed blocking overlays on stagnation.")
                             await event_manager.emit(
@@ -287,7 +290,9 @@ class AgentLoop:
                             continue
                         elif self_healing_attempts == 2:
                             if hasattr(self.executor, "go_back"):
-                                await self.executor.go_back()
+                                _res = self.executor.go_back()
+                                if inspect.isawaitable(_res):
+                                    await _res
                             recovery_hint = "Stagnant loop detected. Backtracked to previous page. Choose an alternative link."
                             state.recovery_notes.append("Self-healing: backtracked via go_back().")
                             await event_manager.emit(
@@ -299,7 +304,9 @@ class AgentLoop:
                             continue
                         elif self_healing_attempts == 3:
                             if hasattr(self.executor, "scroll"):
-                                await self.executor.scroll(delta_y=600)
+                                _res = self.executor.scroll(delta_y=600)
+                                if inspect.isawaitable(_res):
+                                    await _res
                             recovery_hint = "Stagnation detected. Scrolled page down 600px to uncover fresh elements."
                             state.recovery_notes.append("Self-healing: scrolled viewport 600px.")
                             await event_manager.emit(

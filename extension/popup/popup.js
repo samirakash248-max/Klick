@@ -51,6 +51,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupTabs();
   setupBuilder();
   setupQuickRun();
+  setupVoiceNavigation();
   setupMonitorActions();
 
   await detectActiveTab();
@@ -124,7 +125,13 @@ async function checkBackendStatus() {
       if (dot) dot.className = "status-dot online";
       if (text) text.textContent = "ONLINE";
       if (modelPill) {
-        modelPill.textContent = "llama3.2:3b";
+        try {
+          const rRes = await fetch(`${BACKEND_BASE}/api/models/routes`, { signal: AbortSignal.timeout(1000) });
+          const rData = await rRes.json();
+          modelPill.textContent = rData.active_tier === "auto" ? "auto-hybrid" : rData.active_tier;
+        } catch {
+          modelPill.textContent = "llama3.2:3b";
+        }
         modelPill.style.borderColor = "rgba(56, 189, 248, 0.4)";
         modelPill.style.color = "#38bdf8";
       }
@@ -493,4 +500,84 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+// =========================================================================
+// Voice Navigation & Speech Dictation
+// =========================================================================
+
+function setupVoiceNavigation() {
+  const voiceBtn = document.getElementById("btn-voice-input");
+  const voiceIcon = document.getElementById("voice-icon");
+  const quickInput = document.getElementById("quick-goal");
+  if (!voiceBtn || !quickInput) return;
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    voiceBtn.title = "Speech recognition is not supported in this browser version.";
+    voiceBtn.style.opacity = "0.6";
+    voiceBtn.addEventListener("click", () => {
+      alert("Web Speech API is not supported in this browser window. Please type your task goal directly.");
+    });
+    return;
+  }
+
+  let recognition = null;
+  let isListening = false;
+
+  try {
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    recognition.onstart = () => {
+      isListening = true;
+      voiceBtn.classList.add("listening");
+      if (voiceIcon) voiceIcon.textContent = "🔴";
+      quickInput.placeholder = "Listening... speak your automation goal";
+    };
+
+    recognition.onresult = (event) => {
+      let interimTranscript = "";
+      let finalTranscript = "";
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalTranscript += event.results[i][0].transcript;
+        } else {
+          interimTranscript += event.results[i][0].transcript;
+        }
+      }
+      quickInput.value = (finalTranscript || interimTranscript).trim();
+    };
+
+    recognition.onerror = (err) => {
+      console.warn("Speech recognition error:", err);
+      isListening = false;
+      voiceBtn.classList.remove("listening");
+      if (voiceIcon) voiceIcon.textContent = "🎤";
+      quickInput.placeholder = "e.g. search for casetoo and play first video...";
+    };
+
+    recognition.onend = () => {
+      isListening = false;
+      voiceBtn.classList.remove("listening");
+      if (voiceIcon) voiceIcon.textContent = "🎤";
+      quickInput.placeholder = "e.g. search for casetoo and play first video...";
+    };
+
+    voiceBtn.addEventListener("click", () => {
+      if (isListening) {
+        recognition.stop();
+      } else {
+        try {
+          recognition.start();
+        } catch (e) {
+          console.warn("Could not start speech recognition:", e);
+        }
+      }
+    });
+  } catch (err) {
+    console.warn("Speech recognition initialization failed:", err);
+  }
 }

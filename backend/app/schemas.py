@@ -25,6 +25,7 @@ class ActionType(str, Enum):
     SCROLL = "scroll"
     WAIT = "wait"
     EXTRACT = "extract"
+    EXPORT_DATA = "export_data"
     SWITCH_TAB = "switch_tab"
     NEW_TAB = "new_tab"
     CLOSE_TAB = "close_tab"
@@ -156,6 +157,14 @@ class BrowserAction(BaseModel):
         default=None,
         description="Plain text description of the target element (for verification)"
     )
+    export_format: Optional[str] = Field(
+        default="csv",
+        description="Format for structured data export (csv or json)"
+    )
+    export_filename: Optional[str] = Field(
+        default=None,
+        description="Optional custom filename for exported file"
+    )
 
 
     @model_validator(mode="before")
@@ -194,7 +203,15 @@ class BrowserAction(BaseModel):
                     act_str = "close_tab"
                 elif act_str in ("go_back", "back", "navigate_back", "history_back"):
                     act_str = "go_back"
+                elif act_str in ("export_data", "export-data", "export", "scrape_table", "scrape_data", "download_data"):
+                    act_str = "export_data"
                 data["action_type"] = act_str
+
+            # Support export_format and export_filename aliases
+            if "format" in data and "export_format" not in data:
+                data["export_format"] = str(data["format"]).strip().lower()
+            if "filename" in data and "export_filename" not in data:
+                data["export_filename"] = str(data["filename"]).strip()
 
             # Support tab_index extraction from common aliases
             if "tab_index" not in data or data.get("tab_index") is None:

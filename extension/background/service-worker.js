@@ -140,3 +140,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   })();
   return true; // Keep channel open for async response
 });
+
+// 5. Omnibox Integration (Keyword: "klick <goal>")
+chrome.omnibox.onInputChanged.addListener((text, suggest) => {
+  suggest([
+    {
+      content: text,
+      description: `Run Klick: <match>${text}</match> (press Enter to execute)`
+    },
+    {
+      content: `scrape and export table data from this page`,
+      description: `Klick: <match>scrape and export data</match> from active page`
+    },
+    {
+      content: `summarize key points of this page`,
+      description: `Klick: <match>summarize</match> current page`
+    }
+  ]);
+});
+
+chrome.omnibox.onInputEntered.addListener(async (text, disposition) => {
+  if (!text || !text.trim()) return;
+  const goal = text.trim();
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs && tabs[0] ? tabs[0] : null;
+    const startUrl = activeTab ? activeTab.url : "about:blank";
+
+    // Attempt direct in-tab execution first
+    if (activeTab && activeTab.id) {
+      try {
+        const tabRes = await chrome.tabs.sendMessage(activeTab.id, {
+          action: "run_in_tab",
+          goal: goal,
+          maxSteps: 10
+        });
+        if (tabRes && tabRes.success) {
+          await chrome.action.setBadgeText({ text: "RUN" });
+          await chrome.action.setBadgeBackgroundColor({ color: "#00e5ff" });
+          return;
+        }
+      } catch {
+        // Fall back to backend runner
+      }
+    }
+
+    await startAgentTask({
+      goal: goal,
+      start_url: startUrl,
+      max_steps: 10
+    });
+  } catch (err) {
+    console.error("Omnibox execution failed:", err);
+  }
+});

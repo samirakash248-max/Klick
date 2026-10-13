@@ -101,6 +101,7 @@ class SafetyGuard:
             ActionType.WAIT,
             ActionType.SCROLL,
             ActionType.EXTRACT,
+            ActionType.EXPORT_DATA,
             ActionType.SWITCH_TAB,
             ActionType.NEW_TAB,
             ActionType.CLOSE_TAB,

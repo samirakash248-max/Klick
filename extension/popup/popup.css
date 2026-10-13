@@ -458,6 +458,35 @@ body::-webkit-scrollbar-thumb {
   width: 100%;
 }
 
+.voice-btn {
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.voice-btn:hover {
+  border-color: var(--accent-cyan);
+}
+
+.voice-btn.listening {
+  background: rgba(239, 68, 68, 0.25) !important;
+  border-color: #ef4444 !important;
+  color: #ef4444 !important;
+  animation: pulse-red 1s infinite alternate;
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 4px rgba(239, 68, 68, 0.4); transform: scale(1); }
+  100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.8); transform: scale(1.05); }
+}
+
 /* Form Styles */
 .form-card {
   background: var(--bg-card);

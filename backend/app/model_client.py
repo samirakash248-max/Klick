@@ -12,11 +12,13 @@ Owned by: AI Engineer
 
 from __future__ import annotations
 
+from enum import Enum
 import json
 import logging
 import os
 import re
-from typing import Any, Dict, Optional, Protocol, runtime_checkable
+import time
+from typing import Any, Dict, List, Optional, Protocol, Union, runtime_checkable
 
 import httpx
 from pydantic import ValidationError
@@ -856,3 +858,227 @@ class DeterministicDemoModelClient:
             ),
             raw_model_response=f"[DEMO FALLBACK MODE - DETERMINISTIC ADAPTER: {self.model}]",
         )
+
+
+class ModelTier(str, Enum):
+    """Model execution tiers for hybrid intelligent routing."""
+    LOCAL_FAST = "local_fast"      # Ollama local models (llama3.2:3b, qwen2.5:3b)
+    CLOUD_TURBO = "cloud_turbo"    # High-speed cloud providers (Groq, OpenAI, Gemini)
+    AUTO = "auto"                  # Adaptive routing with seamless automatic fallback
+
+
+class HybridModelRouter:
+    """Multi-tier LLM router managing Local Fast and Cloud Turbo models.
+
+    Provides:
+    1. Local-first execution for privacy, zero cost, and low-latency on-device tasks.
+    2. Cloud Turbo routing (Groq / OpenAI / Gemini) for complex multi-step reasoning.
+    3. Seamless automatic fallback: if local inference times out or fails, auto-diverts to cloud.
+    4. Real-time telemetry, latency tracking, and health metrics per tier.
+    """
+
+    def __init__(
+        self,
+        active_tier: Union[str, ModelTier] = ModelTier.AUTO,
+        local_model: Optional[str] = None,
+        cloud_model: Optional[str] = None,
+        timeout: float = 35.0,
+    ) -> None:
+        self.active_tier = ModelTier(active_tier) if isinstance(active_tier, str) else active_tier
+        self.local_client = OllamaModelClient(model=local_model or DEFAULT_MODEL, timeout=timeout)
+        self.demo_client = DeterministicDemoModelClient()
+        self.timeout = timeout
+
+        # Cloud configuration
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        self.cloud_model = cloud_model or os.getenv("CLOUD_MODEL") or ("llama-3.3-70b-versatile" if self.groq_api_key else "gpt-4o-mini")
+
+        # Telemetry & performance metrics
+        self.stats = {
+            "local_requests": 0,
+            "local_successes": 0,
+            "local_failures": 0,
+            "local_avg_latency_ms": 0.0,
+            "cloud_requests": 0,
+            "cloud_successes": 0,
+            "cloud_failures": 0,
+            "cloud_avg_latency_ms": 0.0,
+            "fallbacks_triggered": 0,
+        }
+
+    @property
+    def model(self) -> str:
+        if self.active_tier == ModelTier.CLOUD_TURBO:
+            return f"cloud:{self.cloud_model}"
+        return self.local_client.model
+
+    @model.setter
+    def model(self, value: str) -> None:
+        self.local_client.model = value
+
+    def set_tier(self, tier: Union[str, ModelTier]) -> None:
+        """Switch active model routing tier."""
+        if isinstance(tier, str):
+            clean = tier.strip().lower()
+            if clean in ("local", "local_fast", "ollama"):
+                tier = ModelTier.LOCAL_FAST
+            elif clean in ("cloud", "cloud_turbo", "turbo", "groq", "openai"):
+                tier = ModelTier.CLOUD_TURBO
+            else:
+                tier = ModelTier.AUTO
+        self.active_tier = tier
+
+    def get_routes(self) -> Dict[str, Any]:
+        """Return configured routing options, model tiers, and stats."""
+        has_cloud = bool(self.groq_api_key or self.openai_api_key or self.gemini_api_key)
+        return {
+            "active_tier": self.active_tier.value,
+            "tiers": [
+                {
+                    "id": ModelTier.LOCAL_FAST.value,
+                    "name": "Local Fast (Ollama)",
+                    "model": self.local_client.model,
+                    "available": True,
+                    "description": "Zero-latency, private, on-device inference via Ollama.",
+                },
+                {
+                    "id": ModelTier.CLOUD_TURBO.value,
+                    "name": "Cloud Turbo",
+                    "model": self.cloud_model,
+                    "available": has_cloud,
+                    "description": "Ultra-fast reasoning cloud API (Groq / OpenAI / Gemini).",
+                },
+                {
+                    "id": ModelTier.AUTO.value,
+                    "name": "Auto Hybrid",
+                    "model": f"{self.local_client.model} -> {self.cloud_model}",
+                    "available": True,
+                    "description": "Local-first with automatic fallback to Cloud on failure or timeout.",
+                },
+            ],
+            "cloud_provider": "Groq" if self.groq_api_key else ("OpenAI" if self.openai_api_key else ("Gemini" if self.gemini_api_key else "None")),
+            "stats": self.stats,
+        }
+
+    async def _query_cloud(
+        self,
+        goal: str,
+        observation: PageObservation,
+        step_number: Optional[int] = None,
+        max_steps: int = 10,
+    ) -> AgentResponse:
+        """Execute inference against Cloud Turbo provider."""
+        start_time = time.perf_counter()
+        self.stats["cloud_requests"] += 1
+        user_prompt = self.local_client._format_user_prompt(goal, observation, step_number or 1, max_steps)
+
+        # 1. Groq or OpenAI
+        if self.groq_api_key or self.openai_api_key:
+            endpoint = "https://api.groq.com/openai/v1/chat/completions" if self.groq_api_key else "https://api.openai.com/v1/chat/completions"
+            api_key = self.groq_api_key or self.openai_api_key
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            body = {
+                "model": self.cloud_model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.1,
+            }
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                res = await client.post(endpoint, json=body, headers=headers)
+                res.raise_for_status()
+                data = res.json()
+                content = data["choices"][0]["message"]["content"]
+                response = self.local_client._parse_response(content, observation=observation)
+                latency = (time.perf_counter() - start_time) * 1000
+                self.stats["cloud_successes"] += 1
+                curr_avg = self.stats["cloud_avg_latency_ms"]
+                self.stats["cloud_avg_latency_ms"] = round(latency if curr_avg == 0 else (curr_avg * 0.7 + latency * 0.3), 1)
+                return response
+
+        # 2. Gemini
+        if self.gemini_api_key:
+            gemini_model = self.cloud_model or "gemini-1.5-flash"
+            endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{gemini_model}:generateContent?key={self.gemini_api_key}"
+            body = {
+                "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                "contents": [{"parts": [{"text": user_prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json"},
+            }
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                res = await client.post(endpoint, json=body)
+                res.raise_for_status()
+                data = res.json()
+                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                response = self.local_client._parse_response(content, observation=observation)
+                latency = (time.perf_counter() - start_time) * 1000
+                self.stats["cloud_successes"] += 1
+                return response
+
+        self.stats["cloud_failures"] += 1
+        raise ModelConnectionError("No cloud API key configured (GROQ_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY).")
+
+    async def get_next_action(
+        self,
+        goal: str,
+        observation: PageObservation,
+        step_number: Optional[int] = None,
+        max_steps: int = 10,
+    ) -> AgentResponse:
+        """Route next action prediction to active tier with auto-fallback."""
+        # Case 1: Explicit Cloud Turbo
+        if self.active_tier == ModelTier.CLOUD_TURBO:
+            try:
+                return await self._query_cloud(goal, observation, step_number, max_steps)
+            except Exception as exc:
+                logger.warning("[ROUTER] Cloud Turbo failed (%s), falling back to demo adapter", exc)
+                self.stats["fallbacks_triggered"] += 1
+                return await self.demo_client.get_next_action(goal, observation, step_number, max_steps)
+
+        # Case 2: Explicit Local Fast
+        if self.active_tier == ModelTier.LOCAL_FAST:
+            start_t = time.perf_counter()
+            self.stats["local_requests"] += 1
+            try:
+                res = await self.local_client.get_next_action(goal, observation, step_number, max_steps)
+                latency = (time.perf_counter() - start_t) * 1000
+                self.stats["local_successes"] += 1
+                curr_avg = self.stats["local_avg_latency_ms"]
+                self.stats["local_avg_latency_ms"] = round(latency if curr_avg == 0 else (curr_avg * 0.7 + latency * 0.3), 1)
+                return res
+            except Exception as exc:
+                self.stats["local_failures"] += 1
+                logger.warning("[ROUTER] Local Fast failed (%s), falling back to demo adapter", exc)
+                return await self.demo_client.get_next_action(goal, observation, step_number, max_steps)
+
+        # Case 3: Auto Hybrid (Local First -> Cloud Turbo -> Deterministic Demo)
+        start_t = time.perf_counter()
+        self.stats["local_requests"] += 1
+        try:
+            res = await self.local_client.get_next_action(goal, observation, step_number, max_steps)
+            latency = (time.perf_counter() - start_t) * 1000
+            self.stats["local_successes"] += 1
+            curr_avg = self.stats["local_avg_latency_ms"]
+            self.stats["local_avg_latency_ms"] = round(latency if curr_avg == 0 else (curr_avg * 0.7 + latency * 0.3), 1)
+            return res
+        except Exception as local_err:
+            self.stats["local_failures"] += 1
+            self.stats["fallbacks_triggered"] += 1
+            logger.info("[ROUTER] Local Fast unavailable (%s). Diverting to Cloud Turbo...", local_err)
+
+            # Try Cloud Turbo if keys configured
+            if self.groq_api_key or self.openai_api_key or self.gemini_api_key:
+                try:
+                    return await self._query_cloud(goal, observation, step_number, max_steps)
+                except Exception as cloud_err:
+                    logger.warning("[ROUTER] Cloud Turbo also failed (%s). Using demo fallback.", cloud_err)
+
+            # Final resilient fallback
+            return await self.demo_client.get_next_action(goal, observation, step_number, max_steps)

@@ -50,14 +50,15 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Body
 from fastapi.middleware.cors import CORSMiddleware
 
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from datetime import datetime, timezone
 
 from .agent_loop import AgentLoop
 from .events import EventType, event_manager
-from .executor import MOCK_SITE_DEFAULT_URL, PlaywrightExecutor
+from .executor import EXPORTS_DIR, MOCK_SITE_DEFAULT_URL, PlaywrightExecutor
+from .model_client import HybridModelRouter, ModelTier
 from .observer import PlaywrightObserver
 from .safety import safety_guard
 from .schemas import (
@@ -113,8 +114,11 @@ except ValueError:
 executor = PlaywrightExecutor(headless=HEADLESS_MODE, slow_mo_ms=SLOW_MO_MS, allow_external=ALLOW_EXTERNAL)
 observer = PlaywrightObserver()
 
+# Hybrid intelligent model router singleton
+model_router = HybridModelRouter()
+
 # Global agent loop instance (Member A coordinator)
-agent_loop = AgentLoop(observer=observer, executor=executor)
+agent_loop = AgentLoop(model_client=model_router, observer=observer, executor=executor)
 _active_task: Optional[asyncio.Task] = None
 
 
@@ -675,6 +679,71 @@ async def execute_macro_replay(request: MacroReplayRequest):
             event_manager=event_manager,
         )
         return res
+
+
+# =====================================================================
+# STRUCTURED DATA EXPORTS ENDPOINTS
+# =====================================================================
+
+@app.get("/api/exports")
+async def list_exported_files():
+    """List all extracted datasets available in data/exports."""
+    exports = []
+    if EXPORTS_DIR.exists():
+        for f in sorted(EXPORTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if f.is_file() and f.suffix.lower() in (".csv", ".json"):
+                st = f.stat()
+                exports.append({
+                    "filename": f.name,
+                    "format": f.suffix.lower().lstrip("."),
+                    "size_bytes": st.st_size,
+                    "created_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+                    "download_url": f"/api/exports/{f.name}",
+                })
+    return exports
+
+
+@app.get("/api/exports/{filename}")
+async def download_exported_file(filename: str):
+    """Download or stream an exported CSV or JSON dataset."""
+    safe_name = Path(filename).name
+    file_path = EXPORTS_DIR / safe_name
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Export '{filename}' not found")
+    media_type = "text/csv" if file_path.suffix.lower() == ".csv" else "application/json"
+    return FileResponse(path=str(file_path), media_type=media_type, filename=safe_name)
+
+
+@app.post("/api/export")
+async def trigger_data_export(payload: Dict[str, Any] = Body(default={})):
+    """Trigger on-demand structured data extraction and export on active page."""
+    async with get_browser_lock():
+        target = payload.get("target") or payload.get("selector")
+        fmt = payload.get("format") or payload.get("export_format") or "csv"
+        filename = payload.get("filename") or payload.get("export_filename")
+        res = await executor.export_data(target=target, format=fmt, filename=filename)
+        return res
+
+
+# =====================================================================
+# HYBRID MODEL ROUTING ENDPOINTS
+# =====================================================================
+
+@app.get("/api/models/routes")
+async def get_model_routing_status():
+    """Fetch active LLM tier, available providers, stats, and fallback configuration."""
+    return model_router.get_routes()
+
+
+@app.post("/api/models/route")
+async def set_model_routing_tier(payload: Dict[str, Any] = Body(...)):
+    """Set the active LLM routing tier ('local_fast', 'cloud_turbo', 'auto')."""
+    tier_name = payload.get("tier") or payload.get("mode") or "auto"
+    try:
+        model_router.set_tier(tier_name)
+        return {"success": True, "active_tier": model_router.active_tier.value, "message": f"Switched model route to {model_router.active_tier.value}"}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid model tier '{tier_name}': {exc}")
 
 
 # =====================================================================

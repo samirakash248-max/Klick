@@ -19,6 +19,7 @@ import asyncio
 from datetime import datetime, timezone
 from enum import Enum
 import hashlib
+import inspect
 import os
 import re
 from typing import Any, Dict, List, Optional, Union
@@ -700,7 +701,9 @@ class ControlledAgentRunner:
                             run_id=run_id,
                         )
                         if hasattr(self.executor, "dismiss_overlays"):
-                            await self.executor.dismiss_overlays()
+                            _res = self.executor.dismiss_overlays()
+                            if inspect.isawaitable(_res):
+                                await _res
                         continue
                     else:
                         stop_reason = StopReason.UNGROUNDED_SELECTOR
@@ -734,23 +737,17 @@ class ControlledAgentRunner:
                 # E. Repeated-Action Stuck & Stagnation Detection with Multi-Tiered Self-Healing
                 action_signature = f"{proposed_action.action_type.value}|{proposed_action.selector}|{proposed_action.text}|{proposed_action.url}"
                 is_identical_action = (action_signature == last_action_signature and page_fingerprint == last_page_fingerprint)
-                is_stagnant_page = (page_fingerprint == last_page_fingerprint and proposed_action.action_type not in (ActionType.WAIT, ActionType.SCROLL))
 
                 if is_identical_action:
                     consecutive_identical_count += 1
                 else:
                     consecutive_identical_count = 1
-
-                if is_stagnant_page:
-                    consecutive_stagnant_steps += 1
-                else:
-                    consecutive_stagnant_steps = 0
                     active_recovery_hint = None
 
                 last_action_signature = action_signature
                 last_page_fingerprint = page_fingerprint
 
-                if consecutive_identical_count >= 2 or consecutive_stagnant_steps >= 2:
+                if consecutive_identical_count >= self.stuck_threshold:
                     if self_healing_attempts < max_self_healing_attempts:
                         self_healing_attempts += 1
                         state.self_healing_count += 1
@@ -758,7 +755,9 @@ class ControlledAgentRunner:
                         if self_healing_attempts == 1:
                             # Tier 1: Modal / Overlay Dismissal (Escape + close buttons)
                             if hasattr(self.executor, "dismiss_overlays"):
-                                await self.executor.dismiss_overlays()
+                                _res = self.executor.dismiss_overlays()
+                                if inspect.isawaitable(_res):
+                                    await _res
                             active_recovery_hint = (
                                 f"Action '{proposed_action.action_type.value}' had no effect on page state. "
                                 "Possible blocking overlay or modal was dismissed (Escape pressed). "
@@ -776,7 +775,9 @@ class ControlledAgentRunner:
                         elif self_healing_attempts == 2:
                             # Tier 2: Backtracking Navigation
                             if hasattr(self.executor, "go_back"):
-                                await self.executor.go_back()
+                                _res = self.executor.go_back()
+                                if inspect.isawaitable(_res):
+                                    await _res
                             active_recovery_hint = (
                                 "Stagnant loop detected: Backtracked to previous page. "
                                 f"Do NOT repeat prior action '{proposed_action.action_type.value}'. Explore an alternate path."
@@ -793,7 +794,9 @@ class ControlledAgentRunner:
                         elif self_healing_attempts == 3:
                             # Tier 3: Viewport Scrolling & Discovery
                             if hasattr(self.executor, "scroll"):
-                                await self.executor.scroll(delta_y=600)
+                                _res = self.executor.scroll(delta_y=600)
+                                if inspect.isawaitable(_res):
+                                    await _res
                             active_recovery_hint = (
                                 "Page state is stagnant: Scrolled down 600px to discover new elements. "
                                 "Choose a newly visible element to make progress."

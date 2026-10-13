@@ -138,9 +138,10 @@ render_sidebar(backend_client, ollama_service)
 
 
 # 5. Top Navigation & Tabs
-tab_agent, tab_playground, tab_events = st.tabs([
+tab_agent, tab_playground, tab_exports, tab_events = st.tabs([
     "Agent Control",
     "Model Playground",
+    "Data Exports",
     "Event Telemetry",
 ])
 
@@ -349,7 +350,78 @@ with tab_playground:
 
 
 # =====================================================================
-# TAB 3: TELEMETRY & RAW EVENTS
+# TAB 3: DATA EXPORTS & DATASET VIEWER
+# =====================================================================
+with tab_exports:
+    st.subheader("Structured Data Exports & Datasets")
+    st.caption("Inspect and download extracted table and list data saved to data/exports.")
+
+    # A. On-demand Data Extraction Card
+    with st.expander("Trigger New Data Extraction", expanded=False):
+        col_ex1, col_ex2, col_ex3 = st.columns([2, 1, 1])
+        with col_ex1:
+            export_target_sel = st.text_input("Target Selector (optional)", placeholder="Leave blank to auto-detect tables or lists")
+        with col_ex2:
+            export_fmt_sel = st.selectbox("Export Format", options=["csv", "json"])
+        with col_ex3:
+            export_custom_fn = st.text_input("Filename (optional)", placeholder="e.g. extracted_orders")
+
+        if st.button("Extract Data from Active Page", type="primary", use_container_width=True):
+            with st.spinner("Scraping and exporting structured data..."):
+                exp_res = backend_client.export_data(
+                    target=export_target_sel.strip() or None,
+                    format=export_fmt_sel,
+                    filename=export_custom_fn.strip() or None,
+                )
+                if exp_res.get("success"):
+                    st.success(exp_res.get("message", "Data exported successfully."))
+                    st.rerun()
+                else:
+                    st.error(f"Export failed: {exp_res.get('error', 'Unknown error')}")
+
+    # B. List of Existing Exports
+    export_files = backend_client.get_exports()
+    if export_files:
+        st.markdown(f"**Available Datasets ({len(export_files)}):**")
+        for item in export_files:
+            fn = item.get("filename", "")
+            fmt = item.get("format", "").upper()
+            size_kb = item.get("size_bytes", 0) / 1024.0
+            created = item.get("created_at", "")[:19].replace("T", " ")
+            dl_url = f"{backend_client.base_url}{item.get('download_url', '')}"
+
+            with st.expander(f"📁 {fn} ({fmt} - {size_kb:.1f} KB) - {created}", expanded=False):
+                col_btn1, col_btn2 = st.columns([1, 4])
+                with col_btn1:
+                    st.markdown(f"[⬇ Download File]({dl_url})")
+
+                # Preview file if local
+                local_path = Path(__file__).resolve().parent.parent / "data" / "exports" / fn
+                if local_path.exists():
+                    try:
+                        if fn.endswith(".csv"):
+                            import csv
+                            with open(local_path, "r", encoding="utf-8-sig") as cf:
+                                reader = csv.reader(cf)
+                                preview_rows = [row for i, row in enumerate(reader) if i < 10]
+                                if preview_rows:
+                                    headers = preview_rows[0]
+                                    data_rows = preview_rows[1:]
+                                    st.caption(f"Previewing top {len(data_rows)} rows:")
+                                    st.dataframe(data_rows, use_container_width=True)
+                        elif fn.endswith(".json"):
+                            import json
+                            with open(local_path, "r", encoding="utf-8") as jf:
+                                json_data = json.load(jf)
+                                st.json(json_data)
+                    except Exception as prev_err:
+                        st.caption(f"Could not load preview: {prev_err}")
+    else:
+        st.info("No data exports found in `data/exports`. Trigger an extraction above or ask the agent with action `export_data`.")
+
+
+# =====================================================================
+# TAB 4: TELEMETRY & RAW EVENTS
 # =====================================================================
 with tab_events:
     st.subheader("Live Event History & Raw Telemetry")

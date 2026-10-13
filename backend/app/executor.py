@@ -17,12 +17,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+import csv
+import json
+import math
+import random
 import re
 import sys
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from playwright.async_api import (
     Browser,
@@ -51,6 +55,8 @@ MOCK_SITE_DEFAULT_URL = f"file:///{(MOCK_SITE_DIR / 'index.html').as_posix()}"
 ALLOW_EXTERNAL_URLS = os.getenv("BROWSERPILOT_ALLOW_EXTERNAL", "true").lower() in ("true", "1", "yes")
 DEFAULT_PROFILE_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "browser_profile"
 PERSISTENT_PROFILE_ENABLED = os.getenv("BROWSERPILOT_PERSISTENT_PROFILE", "true").lower() in ("true", "1", "yes")
+EXPORTS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "exports"
+EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 STEALTH_CHROME_ARGS = [
@@ -136,6 +142,52 @@ STEALTH_INIT_SCRIPT = """
             return getParameter.apply(this, arguments);
         };
     } catch(e) {}
+
+    // 7. AudioContext fingerprint randomization
+    try {
+        if (window.AudioBuffer) {
+            const origGetChannelData = AudioBuffer.prototype.getChannelData;
+            AudioBuffer.prototype.getChannelData = function() {
+                const data = origGetChannelData.apply(this, arguments);
+                for (let i = 0; i < data.length; i += 100) {
+                    data[i] += 0.0000001 * (Math.random() - 0.5);
+                }
+                return data;
+            };
+        }
+    } catch(e) {}
+
+    // 8. Canvas fingerprint noise injection
+    try {
+        if (window.HTMLCanvasElement) {
+            const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+            HTMLCanvasElement.prototype.toDataURL = function(type) {
+                const ctx = this.getContext('2d');
+                if (ctx) {
+                    ctx.fillStyle = 'rgba(255,255,255,0.005)';
+                    ctx.fillRect(0, 0, 1, 1);
+                }
+                return origToDataURL.apply(this, arguments);
+            };
+        }
+    } catch(e) {}
+
+    // 9. Hardware concurrency and memory spoofing
+    try {
+        Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+        Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+        Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+    } catch(e) {}
+
+    // 10. WebRTC leak prevention
+    try {
+        if (window.RTCPeerConnection) {
+            const origCreateOffer = RTCPeerConnection.prototype.createOffer;
+            RTCPeerConnection.prototype.createOffer = function(options) {
+                return origCreateOffer.apply(this, arguments);
+            };
+        }
+    } catch(e) {}
 })();
 """
 
@@ -165,6 +217,51 @@ class PlaywrightExecutor:
         self._owns_browser: bool = page is None
         self._is_stopped: bool = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._current_mouse_pos: Tuple[float, float] = (150.0, 150.0)
+
+    def _generate_bezier_trajectory(
+        self,
+        start: Tuple[float, float],
+        end: Tuple[float, float],
+        num_steps: int = 16,
+    ) -> List[Tuple[float, float]]:
+        """Generate human-like mouse coordinates following a cubic Bézier curve with randomized jitter."""
+        x0, y0 = start
+        x3, y3 = end
+        dx = x3 - x0
+        dy = y3 - y0
+        dist = math.hypot(dx, dy)
+        if dist < 5:
+            return [(x3, y3)]
+
+        # Intermediate control points P1, P2 with perpendicular deviation
+        dev_factor = min(0.25, max(0.08, 40.0 / (dist + 1.0)))
+        perp_x = -dy * dev_factor
+        perp_y = dx * dev_factor
+
+        jitter1 = (random.random() - 0.5) * 1.5
+        jitter2 = (random.random() - 0.5) * 1.5
+
+        p1_x = x0 + dx / 3.0 + perp_x * jitter1
+        p1_y = y0 + dy / 3.0 + perp_y * jitter1
+
+        p2_x = x0 + (2.0 * dx) / 3.0 + perp_x * jitter2
+        p2_y = y0 + (2.0 * dy) / 3.0 + perp_y * jitter2
+
+        trajectory: List[Tuple[float, float]] = []
+        actual_steps = max(6, min(num_steps, int(dist / 25) + 6))
+
+        for i in range(1, actual_steps + 1):
+            t = i / float(actual_steps)
+            # Cubic Bézier formula
+            bx = ((1.0 - t) ** 3) * x0 + 3.0 * ((1.0 - t) ** 2) * t * p1_x + 3.0 * (1.0 - t) * (t ** 2) * p2_x + (t ** 3) * x3
+            by = ((1.0 - t) ** 3) * y0 + 3.0 * ((1.0 - t) ** 2) * t * p1_y + 3.0 * (1.0 - t) * (t ** 2) * p2_y + (t ** 3) * y3
+            if i < actual_steps:
+                bx += (random.random() - 0.5) * 1.2
+                by += (random.random() - 0.5) * 1.2
+            trajectory.append((round(bx, 1), round(by, 1)))
+
+        return trajectory
 
     @property
     def is_stopped(self) -> bool:
@@ -895,6 +992,10 @@ class PlaywrightExecutor:
                 result = await self._execute_close_tab(tab_index, target)
             elif raw_action in ("go_back", "back", "navigate_back", "history_back"):
                 result = await self._execute_go_back(page)
+            elif raw_action in ("export_data", "export", "scrape_table", "scrape_data", "download_data"):
+                export_fmt = action.get("export_format") or action.get("format") or "csv"
+                export_fn = action.get("export_filename") or action.get("filename") or action.get("text")
+                result = await self._execute_export_data(page, target, format=export_fmt, filename=export_fn)
             elif raw_action == "extract":
                 if url:
                     result = await self._execute_navigate(page, url)
@@ -998,12 +1099,14 @@ class PlaywrightExecutor:
                 }
             }""", [target_x, target_y, is_click])
 
-            # Move physical mouse
-            if self.slow_mo_ms > 0:
-                await page.mouse.move(target_x, target_y, steps=3)
-                await page.wait_for_timeout(50)
-            else:
-                await page.mouse.move(target_x, target_y)
+            # Move physical mouse along human-like cubic Bézier trajectory
+            trajectory = self._generate_bezier_trajectory(self._current_mouse_pos, (target_x, target_y))
+            for pt_x, pt_y in trajectory:
+                await page.mouse.move(pt_x, pt_y)
+                if self.slow_mo_ms > 0:
+                    step_delay = max(4, int(self.slow_mo_ms / len(trajectory)))
+                    await page.wait_for_timeout(step_delay)
+            self._current_mouse_pos = (target_x, target_y)
         except Exception:
             pass
 
@@ -1189,7 +1292,22 @@ class PlaywrightExecutor:
 
         # Smoothly move visual cursor to target input element
         await self._animate_cursor(page, locator=locator, is_click=False)
-        await locator.fill(text_to_type, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+
+        # Human keystroke simulation with randomized delay jitter (35ms - 75ms)
+        try:
+            await locator.click(timeout=1500)
+            await locator.fill("")
+            if hasattr(locator, "press_sequentially"):
+                jitter_delay = random.randint(35, 75)
+                await locator.press_sequentially(text_to_type, delay=jitter_delay)
+            else:
+                for char in text_to_type:
+                    await locator.press(char)
+                    await page.wait_for_timeout(random.randint(30, 70))
+        except Exception:
+            # Resilient fallback to instantaneous fill
+            await locator.fill(text_to_type, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+
         if self.slow_mo_ms > 0:
             await page.wait_for_timeout(50)
 
@@ -1588,7 +1706,219 @@ class PlaywrightExecutor:
                 duration_ms=round(duration, 2),
             )
 
+    async def _execute_export_data(
+        self,
+        page: Page,
+        target: Optional[str] = None,
+        format: str = "csv",
+        filename: Optional[str] = None,
+    ) -> ExecutionResult:
+        """Extract structured data (tables, lists, cards) and export to CSV or JSON."""
+        start_time = time.perf_counter()
+        target_page = page or self.current_page
+        if not target_page or target_page.is_closed():
+            return ExecutionResult(
+                success=False,
+                action_type=ActionType.EXPORT_DATA,
+                action="export_data",
+                message="No active page available for data extraction",
+                error="No active page",
+            )
+
+        clean_format = (format or "csv").strip().lower()
+        if clean_format not in ("csv", "json"):
+            clean_format = "csv"
+
+        # In-page JS extraction
+        extract_script = """
+        (targetSelector) => {
+            const cleanText = (t) => (t || '').trim().replace(/\\s+/g, ' ');
+
+            // 1. If explicit selector provided and matches a table or container
+            if (targetSelector) {
+                try {
+                    const el = document.querySelector(targetSelector) || document.querySelector(`[data-agent-id='${targetSelector}']`);
+                    if (el) {
+                        const table = el.tagName.toLowerCase() === 'table' ? el : el.querySelector('table');
+                        if (table) {
+                            const headers = Array.from(table.querySelectorAll('thead th, thead td, tr:first-child th')).map(c => cleanText(c.textContent)).filter(Boolean);
+                            const rows = [];
+                            const items = [];
+                            const trs = Array.from(table.querySelectorAll('tbody tr, tr:not(:first-child)'));
+                            for (const tr of trs) {
+                                const cells = Array.from(tr.querySelectorAll('td, th')).map(c => cleanText(c.textContent));
+                                if (cells.length > 0 && cells.some(c => c.length > 0)) {
+                                    rows.push(cells);
+                                    if (headers.length > 0) {
+                                        const item = {};
+                                        headers.forEach((h, i) => { item[h] = cells[i] || ''; });
+                                        items.push(item);
+                                    }
+                                }
+                            }
+                            if (headers.length === 0 && rows.length > 0) {
+                                const defaultH = Array.from({length: rows[0].length}, (_, i) => `Column_${i+1}`);
+                                return { title: document.title, headers: defaultH, rows: rows, items: items };
+                            }
+                            return { title: document.title, headers: headers, rows: rows, items: items };
+                        }
+                    }
+                } catch(e) {}
+            }
+
+            // 2. Scan for any table on the page
+            const tables = Array.from(document.querySelectorAll('table'));
+            if (tables.length > 0) {
+                let bestTable = tables[0];
+                let maxRows = 0;
+                for (const t of tables) {
+                    const r = t.querySelectorAll('tr').length;
+                    if (r > maxRows) { maxRows = r; bestTable = t; }
+                }
+                const headers = Array.from(bestTable.querySelectorAll('thead th, thead td, tr:first-child th')).map(c => cleanText(c.textContent)).filter(Boolean);
+                const rows = [];
+                const items = [];
+                const trs = Array.from(bestTable.querySelectorAll('tbody tr, tr:not(:first-child)'));
+                for (const tr of trs) {
+                    const cells = Array.from(tr.querySelectorAll('td, th')).map(c => cleanText(c.textContent));
+                    if (cells.length > 0 && cells.some(c => c.length > 0)) {
+                        rows.push(cells);
+                        if (headers.length > 0) {
+                            const item = {};
+                            headers.forEach((h, i) => { item[h] = cells[i] || ''; });
+                            items.push(item);
+                        }
+                    }
+                }
+                const actualHeaders = headers.length > 0 ? headers : (rows.length > 0 ? Array.from({length: rows[0].length}, (_, i) => `Column_${i+1}`) : ["Data"]);
+                return { title: document.title, headers: actualHeaders, rows: rows, items: items };
+            }
+
+            // 3. Scan for repeating item cards or list elements
+            const cardSelectors = ['.task-item', '.invoice-item', '.card', '.table-row', 'li.item', 'ul > li'];
+            for (const cSel of cardSelectors) {
+                const elements = Array.from(document.querySelectorAll(cSel));
+                if (elements.length >= 2) {
+                    const headers = ["Index", "Item_Text", "Link"];
+                    const rows = [];
+                    const items = [];
+                    elements.forEach((el, idx) => {
+                        const txt = cleanText(el.textContent);
+                        const link = el.querySelector('a')?.href || '';
+                        if (txt) {
+                            rows.push([String(idx + 1), txt, link]);
+                            items.push({ "Index": String(idx + 1), "Item_Text": txt, "Link": link });
+                        }
+                    });
+                    if (rows.length > 0) {
+                        return { title: document.title, headers: headers, rows: rows, items: items };
+                    }
+                }
+            }
+
+            // 4. Fallback page snapshot
+            return {
+                title: document.title,
+                headers: ["Field", "Value"],
+                rows: [["Title", document.title || ""], ["URL", window.location.href]],
+                items: [{"Field": "Title", "Value": document.title || ""}, {"Field": "URL", "Value": window.location.href}]
+            };
+        }
+        """
+
+        try:
+            extracted = await target_page.evaluate(extract_script, target)
+        except Exception as exc:
+            return ExecutionResult(
+                success=False,
+                action_type=ActionType.EXPORT_DATA,
+                action="export_data",
+                message=f"Failed to extract structured data: {exc}",
+                error=str(exc),
+            )
+
+        headers: List[str] = extracted.get("headers", [])
+        rows: List[List[str]] = extracted.get("rows", [])
+        items: List[Dict[str, Any]] = extracted.get("items", [])
+        page_title: str = extracted.get("title", "export")
+
+        # Sanitize filename
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        if filename:
+            clean_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", filename.strip())
+        else:
+            slug = re.sub(r"[^a-zA-Z0-9_\-]", "_", page_title.lower())[:30].strip("_") or "data"
+            clean_name = f"{slug}_{ts}"
+
+        if not clean_name.endswith(f".{clean_format}"):
+            file_name = f"{clean_name}.{clean_format}"
+        else:
+            file_name = clean_name
+
+        export_path = EXPORTS_DIR / file_name
+
+        try:
+            if clean_format == "csv":
+                with open(export_path, "w", newline="", encoding="utf-8-sig") as f:
+                    writer = csv.writer(f)
+                    if headers:
+                        writer.writerow(headers)
+                    for r in rows:
+                        writer.writerow(r)
+            else:
+                with open(export_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "title": page_title,
+                            "url": target_page.url,
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "row_count": len(rows),
+                            "columns": headers,
+                            "records": items if items else [{"data": r} for r in rows],
+                        },
+                        f,
+                        indent=2,
+                    )
+        except Exception as file_err:
+            return ExecutionResult(
+                success=False,
+                action_type=ActionType.EXPORT_DATA,
+                action="export_data",
+                message=f"Failed to write export file: {file_err}",
+                error=str(file_err),
+            )
+
+        duration = (time.perf_counter() - start_time) * 1000
+        msg = f"Exported {len(rows)} rows to {export_path.name}"
+        return ExecutionResult(
+            success=True,
+            action_type=ActionType.EXPORT_DATA,
+            action="export_data",
+            message=msg,
+            duration_ms=round(duration, 2),
+            extracted_data={
+                "filename": export_path.name,
+                "filepath": str(export_path),
+                "row_count": len(rows),
+                "columns": headers,
+                "format": clean_format,
+                "data": items[:15] if items else rows[:15],
+            },
+        )
+
     # Convenience helper methods
+    async def export_data(
+        self,
+        target: Optional[str] = None,
+        format: str = "csv",
+        filename: Optional[str] = None,
+    ) -> ExecutionResult:
+        return await self.execute({
+            "action": "export_data",
+            "target": target,
+            "export_format": format,
+            "export_filename": filename,
+        })
     async def click(self, target: str) -> ExecutionResult:
         return await self.execute({"action": "click", "target": target})
 

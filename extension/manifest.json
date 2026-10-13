@@ -19,6 +19,9 @@
   "background": {
     "service_worker": "background/service-worker.js"
   },
+  "omnibox": {
+    "keyword": "klick"
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

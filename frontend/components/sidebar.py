@@ -263,7 +263,6 @@ def render_sidebar(backend_client: BackendClient, ollama_service: OllamaService)
             available_models = ollama_health.get("models", [])
             current_model = st.session_state.get("model_name", ollama_service.default_model)
             if available_models:
-                # If current model in list, use selectbox
                 default_idx = available_models.index(current_model) if current_model in available_models else 0
                 selected_model = st.selectbox(
                     "Model Name",
@@ -281,6 +280,27 @@ def render_sidebar(backend_client: BackendClient, ollama_service: OllamaService)
             if selected_model != st.session_state.get("model_name"):
                 st.session_state["model_name"] = selected_model
                 ollama_service.default_model = selected_model
+
+            # Hybrid Model Routing Tier Selector
+            routing_data = backend_client.get_model_routes()
+            active_tier = routing_data.get("active_tier", "auto")
+            tier_options = ["auto", "local_fast", "cloud_turbo"]
+            tier_labels = {
+                "auto": "Auto Hybrid (Local -> Cloud Fallback)",
+                "local_fast": "Local Fast (Ollama On-Device)",
+                "cloud_turbo": "Cloud Turbo (Groq / OpenAI / Gemini)",
+            }
+            sel_tier = st.selectbox(
+                "Model Routing Tier",
+                options=tier_options,
+                index=tier_options.index(active_tier) if active_tier in tier_options else 0,
+                format_func=lambda x: tier_labels.get(x, x),
+                help="Switch between local inference, cloud turbo reasoning, or auto-fallback hybrid.",
+            )
+            if sel_tier != active_tier:
+                backend_client.set_model_route(sel_tier)
+                st.toast(f"Model route switched to {sel_tier}")
+                st.rerun()
 
             st.session_state["max_steps"] = st.slider(
                 "Max Steps per Task",
