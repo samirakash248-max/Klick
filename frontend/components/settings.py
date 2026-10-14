@@ -34,7 +34,27 @@ def render_page_observation(obs: Optional[Dict[str, Any]]) -> None:
         unsafe_allow_html=True,
     )
 
-    # 2. Interactive Elements Table / View
+    # 2. Live Visual Viewport with Set-of-Mark Grounding
+    clean_b64 = obs.get("screenshot_base64")
+    som_b64 = obs.get("annotated_screenshot_base64")
+    if clean_b64 or som_b64:
+        st.markdown("**Visual Viewport & Set-of-Mark Grounding**")
+        view_mode = st.radio(
+            "Visual Mode",
+            ["Set-of-Mark Overlay [0..N]", "Clean Viewport"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="som_view_mode",
+        )
+        display_b64 = som_b64 if (view_mode.startswith("Set-of-Mark") and som_b64) else (clean_b64 or som_b64)
+        if display_b64:
+            st.image(
+                f"data:image/jpeg;base64,{display_b64}",
+                use_column_width=True,
+                caption=f"Live Viewport ({obs.get('visual_elements_count', len(elements))} visually grounded elements)",
+            )
+
+    # 3. Interactive Elements Table / View
     st.markdown(f"**Interactive Elements ({len(elements)} detected)**")
     if elements:
         # Format elements into clean records

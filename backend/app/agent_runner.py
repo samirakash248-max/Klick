@@ -45,6 +45,7 @@ from .model_client import (
 )
 from .observer import PlaywrightObserver
 from .safety import SafetyGuard, safety_guard as default_safety_guard
+from .visual import compute_visual_similarity, resolve_visual_target
 from .schemas import (
     ActionType,
     AgentResponse,
@@ -132,53 +133,73 @@ SEARCH_RESULT_PATTERNS = [
 
 
 def is_action_grounded(action: BrowserAction, observation: PageObservation) -> bool:
-    """Verify that an action targeting an element has a selector grounded in the observation.
+    """Verify that an action targeting an element has a selector or visual mark grounded in the observation.
 
     Prefers exact matches against structured `observation.interactive_elements`.
+    Supports Set-of-Mark visual indexes (e.g. '[0]', '0', 'elem-0') and direct visual coordinates.
     Rejects loose substring occurrences in DOM summary or page copy (e.g. 'button', 'input', '#e1').
     """
     if action.action_type not in (ActionType.CLICK, ActionType.TYPE, ActionType.EXTRACT, ActionType.PRESS_KEY):
         return True
+
+    # Direct visual coordinates are grounded if valid
+    if getattr(action, "coordinates", None):
+        coords = action.coordinates
+        if coords.x >= 0 and coords.y >= 0:
+            return True
 
     # Global keypress without target element is allowed
     if action.action_type == ActionType.PRESS_KEY and not action.selector and not action.target:
         return True
 
     target_val = action.selector or action.target
-    if not target_val:
+    if not target_val and not getattr(action, "visual_mark", None):
         return False
 
-    sel = target_val.strip()
-    norm_sel = sel.replace("'", '"')
-    raw_sel_id = sel.lstrip("#")
-    clean_agent_id = None
-    m = re.search(r'data-agent-id=["\']?([^"\'\]]+)["\']?', sel)
-    if m:
-        clean_agent_id = m.group(1)
+    # Check Set-of-Mark visual target resolution
+    if getattr(action, "visual_mark", None):
+        vt = resolve_visual_target(action.visual_mark, observation.interactive_elements)
+        if vt:
+            return True
 
-    # 1. Match against structured interactive_elements fields
-    for el in observation.interactive_elements:
-        if el.selector:
-            el_sel = el.selector.strip()
-            if el_sel == sel or el_sel.replace("'", '"') == norm_sel:
-                return True
-            if clean_agent_id and (f'data-agent-id="{clean_agent_id}"' in el_sel or f"data-agent-id='{clean_agent_id}'" in el_sel):
-                return True
-        if el.id:
-            clean_id = el.id.strip()
-            if sel == clean_id or sel == f"#{clean_id}" or raw_sel_id == clean_id or clean_agent_id == clean_id:
-                return True
-            if norm_sel == f'[data-agent-id="{clean_id}"]' or sel == f"[data-agent-id='{clean_id}']":
-                return True
+    if target_val:
+        vt = resolve_visual_target(target_val, observation.interactive_elements)
+        if vt:
+            return True
+        if re.match(r"^(?:coords?|point)\s*\(\s*\d+", target_val.strip(), re.IGNORECASE):
+            return True
 
-    # 2. Check for selector declarations formatted in dom_summary
-    if observation.dom_summary:
-        if f"selector: `{sel}`" in observation.dom_summary or f"selector: `{norm_sel}`" in observation.dom_summary:
-            return True
-        if clean_agent_id and f"data-agent-id=\"{clean_agent_id}\"" in observation.dom_summary:
-            return True
-        if clean_agent_id and f"data-agent-id='{clean_agent_id}'" in observation.dom_summary:
-            return True
+        sel = target_val.strip()
+        norm_sel = sel.replace("'", '"')
+        raw_sel_id = sel.lstrip("#")
+        clean_agent_id = None
+        m = re.search(r'data-agent-id=["\']?([^"\'\]]+)["\']?', sel)
+        if m:
+            clean_agent_id = m.group(1)
+
+        # 1. Match against structured interactive_elements fields
+        for el in observation.interactive_elements:
+            if el.selector:
+                el_sel = el.selector.strip()
+                if el_sel == sel or el_sel.replace("'", '"') == norm_sel:
+                    return True
+                if clean_agent_id and (f'data-agent-id="{clean_agent_id}"' in el_sel or f"data-agent-id='{clean_agent_id}'" in el_sel):
+                    return True
+            if el.id:
+                clean_id = el.id.strip()
+                if sel == clean_id or sel == f"#{clean_id}" or raw_sel_id == clean_id or clean_agent_id == clean_id:
+                    return True
+                if norm_sel == f'[data-agent-id="{clean_id}"]' or sel == f"[data-agent-id='{clean_id}']":
+                    return True
+
+        # 2. Check for selector declarations formatted in dom_summary
+        if observation.dom_summary:
+            if f"selector: `{sel}`" in observation.dom_summary or f"selector: `{norm_sel}`" in observation.dom_summary:
+                return True
+            if clean_agent_id and f"data-agent-id=\"{clean_agent_id}\"" in observation.dom_summary:
+                return True
+            if clean_agent_id and f"data-agent-id='{clean_agent_id}'" in observation.dom_summary:
+                return True
 
     return False
 

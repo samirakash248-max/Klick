@@ -96,6 +96,14 @@ class PageObservation(BaseModel):
         default=None,
         description="Optional base64-encoded screenshot image for multimodal validation"
     )
+    annotated_screenshot_base64: Optional[str] = Field(
+        default=None,
+        description="Optional base64-encoded screenshot with Set-of-Mark (SoM) bounding boxes and visual badge markers"
+    )
+    visual_elements_count: int = Field(
+        default=0,
+        description="Total visually grounded elements in the active viewport"
+    )
     error: Optional[str] = Field(
         default=None,
         description="Observation error description if capture partially failed"
@@ -164,6 +172,14 @@ class BrowserAction(BaseModel):
     export_filename: Optional[str] = Field(
         default=None,
         description="Optional custom filename for exported file"
+    )
+    coordinates: Optional[ElementCoordinates] = Field(
+        default=None,
+        description="Optional visual screen coordinates (x, y) for direct coordinate targeting"
+    )
+    visual_mark: Optional[str] = Field(
+        default=None,
+        description="Optional Set-of-Mark visual label (e.g. '[0]', '0', 'elem-0')"
     )
 
 
@@ -535,6 +551,9 @@ class ObservationResponse(BaseModel):
     url: str = Field(..., description="Current page URL")
     title: str = Field(default="", description="Current page title")
     elements: List[Dict[str, Any]] = Field(default_factory=list, description="Visible interactive elements")
+    screenshot_base64: Optional[str] = Field(default=None, description="Current viewport screenshot (base64 JPEG)")
+    annotated_screenshot_base64: Optional[str] = Field(default=None, description="Set-of-Mark visual grounding annotated screenshot")
+    visual_elements_count: int = Field(default=0, description="Total visually grounded elements in the viewport")
 
 
 class StopResponse(BaseModel):

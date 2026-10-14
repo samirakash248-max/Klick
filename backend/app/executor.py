@@ -569,13 +569,17 @@ class PlaywrightExecutor:
 
 
     def _clean_agent_id(self, target: Optional[str]) -> Optional[str]:
-        """Extract clean agent ID from target or selector string."""
+        """Extract clean agent ID from target or selector string, supporting Set-of-Mark tags."""
         if not target:
             return None
         trimmed = target.strip()
         match = re.search(r'data-agent-id=["\']?([^"\'\]]+)["\']?', trimmed)
         if match:
             return match.group(1)
+        # Visual Set-of-Mark mark e.g. [0], [3]
+        som_m = re.match(r"^\[(\d+)\]$", trimmed)
+        if som_m:
+            return f"elem-{som_m.group(1)}"
         return trimmed
 
     async def _resolve_target(
@@ -610,6 +614,8 @@ class PlaywrightExecutor:
             fallback_candidates = [
                 clean_id,
                 f"#{clean_id}",
+                f'[data-agent-id="elem-{clean_id}"]',
+                f'[data-agent-id="id-{clean_id}"]',
                 f'[name="{clean_id}"]',
                 f'[aria-label="{clean_id}"]',
                 f'[placeholder="{clean_id}"]',
@@ -972,8 +978,9 @@ class PlaywrightExecutor:
 
         try:
             # Dispatch to action handlers
+            coordinates = action.get("coordinates")
             if raw_action == "click":
-                result = await self._execute_click(page, target)
+                result = await self._execute_click(page, target, coordinates=coordinates)
             elif raw_action == "type":
                 result = await self._execute_type(page, target, text)
             elif raw_action == "scroll":
@@ -1110,8 +1117,49 @@ class PlaywrightExecutor:
         except Exception:
             pass
 
-    async def _execute_click(self, page: Page, target: Optional[str]) -> ExecutionResult:
-        """Perform click action with exact data-agent-id target resolution."""
+    async def _execute_click(
+        self,
+        page: Page,
+        target: Optional[str] = None,
+        coordinates: Optional[Union[Dict[str, Any], ElementCoordinates]] = None,
+    ) -> ExecutionResult:
+        """Perform click action with exact data-agent-id target resolution or direct visual coordinates."""
+        # 1. Direct visual coordinates execution
+        if coordinates:
+            cx = float(coordinates.get("x") if isinstance(coordinates, dict) else coordinates.x)
+            cy = float(coordinates.get("y") if isinstance(coordinates, dict) else coordinates.y)
+            w = float(coordinates.get("width", 0) if isinstance(coordinates, dict) else (getattr(coordinates, "width", 0) or 0))
+            h = float(coordinates.get("height", 0) if isinstance(coordinates, dict) else (getattr(coordinates, "height", 0) or 0))
+            if w > 0 and h > 0:
+                cx += w / 2.0
+                cy += h / 2.0
+
+            await self._animate_cursor(page, x=cx, y=cy, is_click=True)
+            await page.mouse.click(cx, cy)
+            return ExecutionResult(
+                success=True,
+                action_type=ActionType.CLICK,
+                action="click",
+                target=f"coords({cx:.1f},{cy:.1f})",
+                message=f"Clicked visual screen coordinates ({cx:.1f}, {cy:.1f})",
+            )
+
+        # 2. String coordinates target: "coords(x, y)" or "point(x, y)"
+        if target:
+            coord_m = re.match(r"^(?:coords?|point)\s*\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)$", target.strip(), re.IGNORECASE)
+            if coord_m:
+                cx = float(coord_m.group(1))
+                cy = float(coord_m.group(2))
+                await self._animate_cursor(page, x=cx, y=cy, is_click=True)
+                await page.mouse.click(cx, cy)
+                return ExecutionResult(
+                    success=True,
+                    action_type=ActionType.CLICK,
+                    action="click",
+                    target=f"coords({cx:.1f},{cy:.1f})",
+                    message=f"Clicked visual screen coordinates ({cx:.1f}, {cy:.1f})",
+                )
+
         locator, clean_id, error_result = await self._resolve_target(page, target, "click")
         if error_result:
             return error_result

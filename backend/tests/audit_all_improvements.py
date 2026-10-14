@@ -1,6 +1,6 @@
 """Full Live Audit & Verification Script for Klick Browser Agent.
 
-Audits and verifies all 9 improvements end-to-end:
+Audits and verifies all 10 improvements end-to-end:
 1. Visual Grounding & Dual Engine Execution
 2. Multi-Tab & Popup Management (new_tab, switch_tab, close_tab)
 3. Persistent Profiles & Session Restore (cookies.json, storage)
@@ -10,6 +10,7 @@ Audits and verifies all 9 improvements end-to-end:
 7. Structured Data Scraping & File Export Engine (table extraction to CSV & JSON)
 8. Voice Navigation & Omnibox Chrome Extension Integration
 9. Hybrid Intelligent Model Routing (Local Fast, Cloud Turbo, Auto Fallback)
+10. Multimodal Set-of-Mark Visual Grounding & Coordinate Targeting Engine
 """
 
 import asyncio
@@ -35,7 +36,14 @@ from backend.app.macros import MacroDefinition, MacroStep, macro_manager
 from backend.app.model_client import HybridModelRouter, ModelTier
 from backend.app.observer import PlaywrightObserver
 from backend.app.safety import SafetyGuard
-from backend.app.schemas import ActionType, BrowserAction, PageObservation, RunStatus
+from backend.app.schemas import ActionType, BrowserAction, ElementCoordinates, PageObservation, RunStatus
+from backend.app.visual import (
+    SOM_CLEANUP_SCRIPT,
+    SOM_INJECT_SCRIPT,
+    capture_page_screenshots,
+    compute_visual_similarity,
+    resolve_visual_target,
+)
 
 
 async def run_full_audit():
@@ -59,7 +67,7 @@ async def run_full_audit():
         # -----------------------------------------------------------------
         # AUDIT 1: VISUAL GROUNDING & DUAL ENGINE
         # -----------------------------------------------------------------
-        print("\n[AUDIT 1/9] Testing Visual Grounding & Navigation...")
+        print("\n[AUDIT 1/10] Testing Visual Grounding & Navigation...")
         t0 = time.perf_counter()
         nav_res = await executor.navigate(tasks_html)
         assert nav_res.success, f"Navigation failed: {nav_res.message}"
@@ -74,7 +82,7 @@ async def run_full_audit():
         # -----------------------------------------------------------------
         # AUDIT 2: MULTI-TAB & POPUP MANAGEMENT
         # -----------------------------------------------------------------
-        print("\n[AUDIT 2/9] Testing Multi-Tab & Popup Management...")
+        print("\n[AUDIT 2/10] Testing Multi-Tab & Popup Management...")
         new_tab_res = await executor.new_tab(billing_html)
         assert new_tab_res.success, f"New tab failed: {new_tab_res.message}"
         tabs = await executor.get_open_tabs()
@@ -96,7 +104,7 @@ async def run_full_audit():
         # -----------------------------------------------------------------
         # AUDIT 3: PERSISTENT PROFILES & SESSIONS
         # -----------------------------------------------------------------
-        print("\n[AUDIT 3/9] Testing Persistent Profiles & Session Storage...")
+        print("\n[AUDIT 3/10] Testing Persistent Profiles & Session Storage...")
         # Add a session cookie
         if executor._context:
             await executor._context.add_cookies([{
@@ -117,7 +125,7 @@ async def run_full_audit():
         # -----------------------------------------------------------------
         # AUDIT 4: CYCLIC STAGNATION DETECTION & SELF-HEALING BACKTRACKING
         # -----------------------------------------------------------------
-        print("\n[AUDIT 4/9] Testing Cyclic Stagnation Detection & Self-Healing...")
+        print("\n[AUDIT 4/10] Testing Cyclic Stagnation Detection & Self-Healing...")
         # Navigate to index and open invoice modal
         await executor.navigate(billing_html)
         modal_click = await executor.click("dash-view-invoice-1001")
@@ -141,7 +149,7 @@ async def run_full_audit():
         # -----------------------------------------------------------------
         # AUDIT 5: DETERMINISTIC RPA MACROS
         # -----------------------------------------------------------------
-        print("\n[AUDIT 5/9] Testing Deterministic RPA Macros...")
+        print("\n[AUDIT 5/10] Testing Deterministic RPA Macros...")
         test_macro = MacroDefinition(
             id="audit-macro-test",
             name="Audit Task Search",
@@ -170,7 +178,7 @@ async def run_full_audit():
         # -----------------------------------------------------------------
         # AUDIT 6: ANTI-BOT & STEALTH HARDENING
         # -----------------------------------------------------------------
-        print("\n[AUDIT 6/9] Testing Anti-Bot & Stealth Hardening...")
+        print("\n[AUDIT 6/10] Testing Anti-Bot & Stealth Hardening...")
         # Check spoofed navigator attributes in live page
         fingerprints = await page.evaluate("""() => ({
             webdriver: navigator.webdriver,
@@ -198,7 +206,7 @@ async def run_full_audit():
         # -----------------------------------------------------------------
         # AUDIT 7: STRUCTURED DATA SCRAPING & FILE EXPORT ENGINE
         # -----------------------------------------------------------------
-        print("\n[AUDIT 7/9] Testing Structured Data Scraping & Export...")
+        print("\n[AUDIT 7/10] Testing Structured Data Scraping & Export...")
         export_csv_res = await executor.export_data(
             target="table",
             format="csv",
@@ -232,7 +240,7 @@ async def run_full_audit():
         # -----------------------------------------------------------------
         # AUDIT 8: VOICE NAVIGATION & OMNIBOX INTEGRATION
         # -----------------------------------------------------------------
-        print("\n[AUDIT 8/9] Testing Voice Navigation & Omnibox Integration...")
+        print("\n[AUDIT 8/10] Testing Voice Navigation & Omnibox Integration...")
         manifest_file = REPO_ROOT / "extension" / "manifest.json"
         m_data = json.loads(manifest_file.read_text(encoding="utf-8"))
         assert m_data.get("omnibox", {}).get("keyword") == "klick", "Omnibox keyword 'klick' not found in manifest"
@@ -252,7 +260,7 @@ async def run_full_audit():
         # -----------------------------------------------------------------
         # AUDIT 9: HYBRID MODEL ROUTING
         # -----------------------------------------------------------------
-        print("\n[AUDIT 9/9] Testing Hybrid Model Routing & Fallback...")
+        print("\n[AUDIT 9/10] Testing Hybrid Model Routing & Fallback...")
         router = HybridModelRouter(active_tier=ModelTier.AUTO)
         routes = router.get_routes()
         assert routes["active_tier"] == "auto"
@@ -274,11 +282,42 @@ async def run_full_audit():
         print("  [OK] Hybrid model router tier switching, routing, and auto-fallback verified")
         audit_results["9_hybrid_model_routing"] = "PASSED"
 
+        # -----------------------------------------------------------------
+        # AUDIT 10: MULTIMODAL SET-OF-MARK (SoM) VISUAL GROUNDING & VISION
+        # -----------------------------------------------------------------
+        print("\n[AUDIT 10/10] Testing Set-of-Mark Visual Grounding & Vision Pipeline...")
+        await executor.navigate(tasks_html)
+        obs_visual = await observer.observe(page)
+
+        # Verify clean and annotated screenshots were captured
+        assert obs_visual.screenshot_base64 is not None, "Missing clean screenshot_base64"
+        assert obs_visual.annotated_screenshot_base64 is not None, "Missing annotated_screenshot_base64"
+        assert obs_visual.visual_elements_count > 0, "No visual elements marked with SoM badges"
+        assert len(obs_visual.screenshot_base64) > 100, "Clean screenshot payload too small"
+        assert len(obs_visual.annotated_screenshot_base64) > 100, "Annotated screenshot payload too small"
+
+        # Verify visual mark resolution
+        resolved_elem, mark_idx = resolve_visual_target("[0]", obs_visual.interactive_elements)
+        assert resolved_elem is not None, "Failed to resolve mark [0] to ElementDescriptor"
+        assert mark_idx == 0, f"Expected mark_idx 0, got {mark_idx}"
+
+        # Verify perceptual similarity calculation between captured screenshot and itself
+        sim = compute_visual_similarity(obs_visual.screenshot_base64, obs_visual.screenshot_base64)
+        assert sim == 1.0, f"Expected perceptual similarity 1.0, got {sim}"
+
+        # Verify coordinate click execution
+        first_coords = resolved_elem.coordinates or ElementCoordinates(x=100.0, y=100.0, width=50.0, height=20.0)
+        coord_click = await executor._execute_click(page, coordinates=first_coords)
+        assert coord_click.success is True, f"Visual coordinate click failed: {coord_click.message}"
+
+        print(f"  [OK] Set-of-Mark overlay injected ({obs_visual.visual_elements_count} badges), screenshots captured, mark resolved, coordinate click executed")
+        audit_results["10_som_visual_grounding"] = "PASSED"
+
     finally:
         await executor.close()
 
     print("\n" + "=" * 80)
-    print("AUDIT SUMMARY: ALL 9 IMPROVEMENTS VERIFIED")
+    print("AUDIT SUMMARY: ALL 10 IMPROVEMENTS VERIFIED")
     print("=" * 80)
     for k, status in sorted(audit_results.items()):
         print(f"  {k:35} : {status}")

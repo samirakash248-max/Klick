@@ -94,6 +94,16 @@ async function startInTabTask(goal, maxSteps, model = "llama3.2:3b") {
       // 1. Capture live page observation (token-optimized)
       const observation = observeDOM();
 
+      // Request tab screenshot from background service worker for visual grounding
+      try {
+        const shotRes = await chrome.runtime.sendMessage({ action: "capture_tab_screenshot" });
+        if (shotRes && shotRes.success && shotRes.screenshot_base64) {
+          observation.screenshot_base64 = shotRes.screenshot_base64;
+        }
+      } catch {
+        // Fallback gracefully without visual screenshot
+      }
+
       // 2. Query backend cognitive step
       const stepRes = await fetch(`${BACKEND_BASE}/api/extension/step`, {
         method: "POST",
@@ -263,6 +273,18 @@ async function executeDomAction(action) {
   const target = action.selector || action.target || "";
 
   if (actType === "click") {
+    // Direct visual screen coordinates execution
+    if (action.coordinates && typeof action.coordinates.x === "number") {
+      const cx = action.coordinates.x + (action.coordinates.width || 0) / 2;
+      const cy = action.coordinates.y + (action.coordinates.height || 0) / 2;
+      const coordEl = document.elementFromPoint(cx, cy);
+      if (coordEl) {
+        highlightElement(coordEl);
+        coordEl.click();
+        return { success: true, message: `Clicked visual coordinates (${Math.round(cx)}, ${Math.round(cy)})` };
+      }
+    }
+
     const el = resolveTargetElement(target);
     if (!el) {
       return { success: false, error: `Element '${target}' not found on page` };
@@ -394,6 +416,14 @@ async function executeDomAction(action) {
 function resolveTargetElement(target) {
   if (!target) return null;
   const cleanId = target.replace(/\[data-agent-id=["']?([^"']+)["']?\]/, "$1").trim();
+
+  // 0. Set-of-Mark visual mark resolution e.g. [0], [3], elem-0
+  const somMatch = cleanId.match(/^\[?(\d+)\]?$/);
+  if (somMatch) {
+    const idx = somMatch[1];
+    const somEl = document.querySelector(`[data-agent-id="elem-${idx}"], [data-agent-id="id-${idx}"]`);
+    if (somEl) return somEl;
+  }
 
   // 1. YouTube video title link resolution
   if (cleanId === "id-video-title" || cleanId.includes("video-title") || cleanId.includes("watch")) {

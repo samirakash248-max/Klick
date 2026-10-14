@@ -7,6 +7,7 @@ Owned by: Browser Automation Engineer (Member B)
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from playwright.async_api import (
@@ -17,6 +18,9 @@ from playwright.async_api import (
     async_playwright,
 )
 from .schemas import ElementCoordinates, ElementDescriptor, PageObservation
+from .visual import capture_page_screenshots, draw_som_annotations_pil
+
+logger = logging.getLogger("browserpilot.observer")
 
 
 class PlaywrightObserver:
@@ -153,18 +157,36 @@ class PlaywrightObserver:
                         "is_active": is_active,
                     })
 
+        clean_b64 = None
+        annotated_b64 = None
+        marks_cnt = 0
+        try:
+            if not getattr(active_page, "is_closed", lambda: True)():
+                clean_b64, annotated_b64, marks_cnt = await capture_page_screenshots(
+                    active_page, annotate_som=True, quality=75
+                )
+                if clean_b64 and not annotated_b64 and raw_elements:
+                    desc_list = self._build_element_descriptors(raw_elements)
+                    annotated_b64, marks_cnt = draw_som_annotations_pil(clean_b64, desc_list)
+        except Exception as shot_err:
+            logger.debug("Visual capture in observe_structured failed: %s", shot_err)
+
         return {
             "url": url,
             "title": title,
             "elements": elements_list,
+            "screenshot_base64": clean_b64,
+            "annotated_screenshot_base64": annotated_b64,
+            "visual_elements_count": marks_cnt or len(elements_list),
             "open_tabs": open_tabs,
             "active_tab_index": active_idx,
         }
 
-    async def observe(self, page: Optional[Page] = None) -> PageObservation:
+    async def observe(self, page: Optional[Page] = None, capture_screenshot: bool = True) -> PageObservation:
         """Capture the current state of the page into a PageObservation.
         
-        Extracts title, URL, interactive elements, text snippet, and DOM summary.
+        Extracts title, URL, interactive elements, text snippet, DOM summary,
+        and high-resolution Set-of-Mark annotated screenshots for multimodal visual grounding.
         Maintains backward compatibility with agent_loop and schemas.
         """
         try:
@@ -200,12 +222,30 @@ class PlaywrightObserver:
             # Extract visible text snippet
             snippet = await self._extract_text_snippet(active_page)
 
+            # Capture visual Set-of-Mark screenshots
+            clean_b64 = None
+            annotated_b64 = None
+            marks_cnt = 0
+            if capture_screenshot and not getattr(active_page, "is_closed", lambda: True)():
+                try:
+                    clean_b64, annotated_b64, marks_cnt = await capture_page_screenshots(
+                        active_page, annotate_som=True, quality=75
+                    )
+                    # If in-page overlay didn't produce marks, use PIL fallback
+                    if clean_b64 and not annotated_b64 and interactive_elements:
+                        annotated_b64, marks_cnt = draw_som_annotations_pil(clean_b64, interactive_elements)
+                except Exception as shot_err:
+                    logger.debug("Visual screenshot capture error: %s", shot_err)
+
             return PageObservation(
                 url=url,
                 title=title,
                 dom_summary=dom_summary,
                 interactive_elements=interactive_elements,
                 page_text_snippet=snippet,
+                screenshot_base64=clean_b64,
+                annotated_screenshot_base64=annotated_b64,
+                visual_elements_count=marks_cnt or len(interactive_elements),
                 open_tabs=open_tabs,
                 active_tab_index=active_idx,
             )

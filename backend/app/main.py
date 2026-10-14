@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Body
 from fastapi.middleware.cors import CORSMiddleware
 
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from datetime import datetime, timezone
@@ -187,6 +187,9 @@ async def observe_browser():
                 url=obs.get("url", ""),
                 title=obs.get("title", ""),
                 elements=obs.get("elements", []),
+                screenshot_base64=obs.get("screenshot_base64"),
+                annotated_screenshot_base64=obs.get("annotated_screenshot_base64"),
+                visual_elements_count=obs.get("visual_elements_count", len(obs.get("elements", []))),
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Observation failed: {str(exc)}")
@@ -744,6 +747,77 @@ async def set_model_routing_tier(payload: Dict[str, Any] = Body(...)):
         return {"success": True, "active_tier": model_router.active_tier.value, "message": f"Switched model route to {model_router.active_tier.value}"}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid model tier '{tier_name}': {exc}")
+
+
+# =====================================================================
+# VISUAL GROUNDING & SET-OF-MARK SCREENSHOT ENDPOINTS
+# =====================================================================
+
+@app.get("/api/visual/screenshot")
+async def get_visual_screenshot(format: str = "json"):
+    """Return current browser viewport screenshot (clean)."""
+    async with get_browser_lock():
+        if not executor.current_page or executor.current_page.is_closed():
+            raise HTTPException(status_code=400, detail="No active browser page")
+        try:
+            obs = await observer.observe_structured(executor.current_page)
+            b64 = obs.get("screenshot_base64")
+            if not b64:
+                raise HTTPException(status_code=500, detail="Failed to capture viewport screenshot")
+            if format.lower() in ("image", "jpeg", "jpg"):
+                import base64
+                return Response(content=base64.b64decode(b64), media_type="image/jpeg")
+            return {
+                "url": obs.get("url"),
+                "title": obs.get("title"),
+                "screenshot_base64": b64,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/api/visual/annotated")
+async def get_visual_annotated_screenshot(format: str = "json"):
+    """Return current browser viewport screenshot annotated with Set-of-Mark visual bounding boxes and badges."""
+    async with get_browser_lock():
+        if not executor.current_page or executor.current_page.is_closed():
+            raise HTTPException(status_code=400, detail="No active browser page")
+        try:
+            obs = await observer.observe_structured(executor.current_page)
+            b64 = obs.get("annotated_screenshot_base64") or obs.get("screenshot_base64")
+            if not b64:
+                raise HTTPException(status_code=500, detail="Failed to capture annotated screenshot")
+            if format.lower() in ("image", "jpeg", "jpg"):
+                import base64
+                return Response(content=base64.b64decode(b64), media_type="image/jpeg")
+            return {
+                "url": obs.get("url"),
+                "title": obs.get("title"),
+                "visual_elements_count": obs.get("visual_elements_count", 0),
+                "annotated_screenshot_base64": b64,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/visual/inspect")
+async def inspect_visual_page(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Perform a comprehensive visual inspection returning clean & Set-of-Mark screenshots and element bboxes."""
+    async with get_browser_lock():
+        if not executor.current_page or executor.current_page.is_closed():
+            await executor.initialize()
+        try:
+            obs = await observer.observe(executor.current_page)
+            return {
+                "url": obs.url,
+                "title": obs.title,
+                "visual_elements_count": obs.visual_elements_count,
+                "screenshot_base64": obs.screenshot_base64,
+                "annotated_screenshot_base64": obs.annotated_screenshot_base64,
+                "interactive_elements": [el.model_dump() for el in obs.interactive_elements],
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Visual inspection failed: {exc}")
 
 
 # =====================================================================

@@ -136,6 +136,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (err) {
         sendResponse({ success: false, error: err.message });
       }
+    } else if (message.action === "capture_tab_screenshot") {
+      try {
+        const winId = sender?.tab?.windowId || chrome.windows.WINDOW_ID_CURRENT;
+        const dataUrl = await chrome.tabs.captureVisibleTab(winId, { format: "jpeg", quality: 75 });
+        const b64 = dataUrl ? dataUrl.replace(/^data:image\/[a-z]+;base64,/, "") : null;
+        sendResponse({ success: true, screenshot_base64: b64 });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
     }
   })();
   return true; // Keep channel open for async response

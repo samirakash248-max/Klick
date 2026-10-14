@@ -384,4 +384,41 @@ class BackendClient:
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
+    # =========================================================================
+    # VISUAL GROUNDING & SET-OF-MARK INSPECTION
+    # =========================================================================
+
+    def get_visual_screenshot(self) -> Dict[str, Any]:
+        """Fetch latest clean viewport screenshot."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/visual/screenshot")
+                if res.status_code == 200:
+                    return res.json()
+                return {"error": res.text}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def get_visual_annotated(self) -> Dict[str, Any]:
+        """Fetch latest Set-of-Mark annotated viewport screenshot."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/visual/annotated")
+                if res.status_code == 200:
+                    return res.json()
+                return {"error": res.text}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def inspect_visual(self) -> Dict[str, Any]:
+        """Perform comprehensive visual inspection with element bounding boxes."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/visual/inspect", json={})
+                if res.status_code == 200:
+                    return res.json()
+                return {"error": res.text}
+        except Exception as exc:
+            return {"error": str(exc)}
+
 
