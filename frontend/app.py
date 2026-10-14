@@ -259,7 +259,7 @@ with tab_agent:
         render_action_timeline(history=history, events=events)
 
     with col_obs:
-        render_page_observation(observation)
+        render_page_observation(observation, backend_client=backend_client)
 
     # Post-Run Summary
     render_run_summary(agent_state)

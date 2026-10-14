@@ -502,6 +502,7 @@ class PlaywrightExecutor:
                                 await self._page.bring_to_front()
                             except Exception:
                                 pass
+                            self._bring_window_to_foreground()
                             self._owns_browser = True
                             await self.load_cookies()
                             return self._page
@@ -550,6 +551,7 @@ class PlaywrightExecutor:
                     await self._page.bring_to_front()
                 except Exception:
                     pass
+                self._bring_window_to_foreground()
                 self._owns_browser = True
                 await self.load_cookies()
                 return self._page
@@ -567,6 +569,55 @@ class PlaywrightExecutor:
                 if attempt == 1:
                     raise exc
 
+    def _bring_window_to_foreground(self) -> None:
+        """Find the Chromium / Chrome browser window on the interactive desktop and bring it to front."""
+        if sys.platform != "win32" or self.headless:
+            return
+        try:
+            import ctypes
+            u32 = ctypes.windll.user32
+            hdesk = u32.OpenDesktopW("Default", 0, False, 0x01FF)
+
+            def enum_cb(hwnd, _):
+                try:
+                    if u32.IsWindowVisible(hwnd):
+                        buf = ctypes.create_unicode_buffer(512)
+                        u32.GetWindowTextW(hwnd, buf, 512)
+                        title = buf.value
+                        if title and any(k in title.lower() for k in ("chrome", "youtube", "google", "klick", "task manager", "apexflow", "chromium")):
+                            u32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                            u32.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            proc = WNDENUMPROC(enum_cb)
+            if hdesk:
+                u32.EnumDesktopWindows(hdesk, proc, 0)
+                u32.CloseDesktop(hdesk)
+            else:
+                u32.EnumWindows(proc, 0)
+        except Exception:
+            pass
+
+    async def focus_window(self) -> ExecutionResult:
+        """Explicitly bring active browser window to front on desktop."""
+        target_page = self.current_page
+        if target_page and not target_page.is_closed():
+            try:
+                await target_page.bring_to_front()
+            except Exception:
+                pass
+        self._bring_window_to_foreground()
+        url = target_page.url if target_page and not target_page.is_closed() else ""
+        return ExecutionResult(
+            success=True,
+            action_type=ActionType.WAIT,
+            action="focus_window",
+            url=url,
+            message="Brought browser window to front on desktop",
+        )
 
     def _clean_agent_id(self, target: Optional[str]) -> Optional[str]:
         """Extract clean agent ID from target or selector string, supporting Set-of-Mark tags."""
@@ -1501,6 +1552,7 @@ class PlaywrightExecutor:
         current_url = page.url
         title = await page.title()
         msg = f"Navigated to {current_url} ('{title}')"
+        self._bring_window_to_foreground()
 
         return ExecutionResult(
             success=True,
@@ -1627,6 +1679,7 @@ class PlaywrightExecutor:
         self._page = selected_page
         try:
             await selected_page.bring_to_front()
+            self._bring_window_to_foreground()
             title = await selected_page.title()
         except Exception:
             title = selected_page.url or ""
@@ -1651,6 +1704,7 @@ class PlaywrightExecutor:
         self._page = new_page
         try:
             await new_page.bring_to_front()
+            self._bring_window_to_foreground()
         except Exception:
             pass
 

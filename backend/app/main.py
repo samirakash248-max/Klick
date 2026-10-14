@@ -584,6 +584,32 @@ async def close_browser_tab(payload: Dict[str, Any] = Body(default={})):
         return res
 
 
+@app.post("/api/browser/focus")
+async def focus_browser_window():
+    """Explicitly bring active Chromium browser window to front on desktop."""
+    async with get_browser_lock():
+        res = await executor.focus_window()
+        return res.model_dump()
+
+
+@app.post("/api/browser/open-in-system")
+async def open_in_system_browser(payload: Dict[str, Any] = Body(default={})):
+    """Open current tab URL or specified URL in user's default system browser."""
+    import webbrowser
+    url = payload.get("url")
+    if not url:
+        page = executor.current_page
+        if page and not page.is_closed():
+            url = page.url
+    if not url or url in ("about:blank", ""):
+        url = "http://127.0.0.1:8000/mock/tasks.html"
+    try:
+        webbrowser.open(url)
+        return {"success": True, "url": url, "message": f"Opened '{url}' in system browser"}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
 @app.get("/api/profile/status")
 async def get_profile_status():
     """Return persistent user profile configuration, cookie backup status, and storage directory."""

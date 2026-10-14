@@ -421,4 +421,30 @@ class BackendClient:
         except Exception as exc:
             return {"error": str(exc)}
 
+    # =========================================================================
+    # BROWSER WINDOW FOCUS & SYSTEM INTERACTION
+    # =========================================================================
+
+    def focus_browser(self) -> Dict[str, Any]:
+        """Bring the visible Chromium browser window to front on desktop."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/browser/focus", json={})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def open_in_system_browser(self, url: Optional[str] = None) -> Dict[str, Any]:
+        """Open current tab URL in the user's default desktop browser."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/browser/open-in-system", json={"url": url} if url else {})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
 

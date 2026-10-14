@@ -4,12 +4,17 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 try:
+    from services.backend_client import BackendClient
     from utils.formatting import format_duration, get_status_badge, safe_json_dumps
 except (ImportError, ValueError):
+    from frontend.services.backend_client import BackendClient
     from frontend.utils.formatting import format_duration, get_status_badge, safe_json_dumps
 
 
-def render_page_observation(obs: Optional[Dict[str, Any]]) -> None:
+def render_page_observation(
+    obs: Optional[Dict[str, Any]],
+    backend_client: Optional[BackendClient] = None,
+) -> None:
     """Render the latest structured browser observation from PlaywrightObserver."""
     st.subheader("Current Page Observation")
 
@@ -17,15 +22,18 @@ def render_page_observation(obs: Optional[Dict[str, Any]]) -> None:
         st.info("No active page observation available. Ensure the backend browser is running.")
         return
 
+    if backend_client is None:
+        backend_client = BackendClient()
+
     url = obs.get("url", "about:blank")
     title = obs.get("title", "(No Page Title)")
     elements = obs.get("elements", [])
     snippet = obs.get("page_text_snippet") or obs.get("snippet") or ""
 
-    # 1. URL & Title Card
+    # 1. URL & Title Card with Interactive Window Controls
     st.markdown(
         f"""
-        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 0.75rem;">
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 0.5rem;">
             <div style="font-size: 0.75rem; color: #64748b; font-weight: 600; text-transform: uppercase;">Active Browser Target</div>
             <div style="font-weight: 700; font-size: 1rem; color: #0f172a; margin-top: 0.15rem;">{title}</div>
             <div style="font-size: 0.8rem; color: #2563eb; font-family: monospace; word-break: break-all; margin-top: 0.2rem;">{url}</div>
@@ -33,6 +41,19 @@ def render_page_observation(obs: Optional[Dict[str, Any]]) -> None:
         """,
         unsafe_allow_html=True,
     )
+
+    c_act1, c_act2, c_act3 = st.columns([1, 1, 1])
+    with c_act1:
+        if st.button("🖥️ Bring Tab to Front", key="btn_bring_front_main", use_container_width=True):
+            backend_client.focus_browser()
+            st.toast("Brought browser window to front!")
+    with c_act2:
+        if st.button("🌐 Open in System Browser", key="btn_open_sys_main", use_container_width=True):
+            backend_client.open_in_system_browser(url)
+            st.toast("Opened in your desktop browser!")
+    with c_act3:
+        if url and url.startswith("http"):
+            st.link_button("↗️ Open URL Directly", url=url, use_container_width=True)
 
     # 2. Live Visual Viewport with Set-of-Mark Grounding
     clean_b64 = obs.get("screenshot_base64")

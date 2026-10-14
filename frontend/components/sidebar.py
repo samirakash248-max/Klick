@@ -148,6 +148,17 @@ def render_sidebar(backend_client: BackendClient, ollama_service: OllamaService)
                         st.toast(f"Closed Tab #{sel_idx}")
                         st.rerun()
 
+            # Browser Window Visibility & Focus Controls
+            c_win1, c_win2 = st.columns(2)
+            with c_win1:
+                if st.button("🖥️ Show Browser", key="sidebar_show_browser_btn", use_container_width=True):
+                    backend_client.focus_browser()
+                    st.toast("Brought browser window to front!")
+            with c_win2:
+                if st.button("🌐 Open in Chrome", key="sidebar_open_sys_btn", use_container_width=True):
+                    backend_client.open_in_system_browser()
+                    st.toast("Opened current tab in system browser!")
+
             # Profile Clear Option
             if st.button("Clear Profile & Cookies", key="sidebar_clear_prof_btn", use_container_width=True):
                 backend_client.clear_profile()
