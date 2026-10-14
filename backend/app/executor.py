@@ -1423,7 +1423,7 @@ class PlaywrightExecutor:
                 const aria = (el.getAttribute('aria-label') || '').toLowerCase();
                 const role = (el.getAttribute('role') || '').toLowerCase();
                 return type === 'search' || role === 'searchbox' ||
-                       name.includes('search') || name.includes('query') ||
+                       name.includes('search') || name.includes('query') || name === 'q' ||
                        placeholder.includes('search') || aria.includes('search');
             }""")
             if elem_is_search:

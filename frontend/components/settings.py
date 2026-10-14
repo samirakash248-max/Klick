@@ -73,7 +73,7 @@ def render_page_observation(
         if display_b64:
             st.image(
                 f"data:image/jpeg;base64,{display_b64}",
-                use_column_width=True,
+                use_container_width=True,
                 caption=f"Live Viewport ({obs.get('visual_elements_count', len(elements))} visually grounded elements)",
             )
 

@@ -495,11 +495,11 @@ with tab_scheduler:
         for sch in schedules:
             sid = sch.get("id")
             sname = sch.get("name")
-            stype = sch.get("schedule_type", "interval").upper()
+            stype = str(sch.get("schedule_type") or "interval").upper()
             interval = sch.get("interval_seconds", 3600)
-            status = sch.get("last_status", "idle")
-            last_run = sch.get("last_run", "Never")
-            next_run = sch.get("next_run", "-")
+            status = sch.get("last_status") or "idle"
+            last_run = sch.get("last_run") or "Never"
+            next_run = sch.get("next_run") or "-"
             status_color = "🟢" if status == "success" else ("🔴" if status == "failed" else "⚪")
 
             with st.expander(f"{status_color} **{sname}** ({stype} every {interval}s) - Status: {status.upper()}", expanded=True):
