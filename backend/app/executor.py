@@ -218,6 +218,8 @@ class PlaywrightExecutor:
         self._is_stopped: bool = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._current_mouse_pos: Tuple[float, float] = (150.0, 150.0)
+        self.cdp_url: str = os.getenv("CHROME_CDP_URL") or "http://localhost:9222"
+        self.is_cdp_connected: bool = False
 
     def _generate_bezier_trajectory(
         self,
@@ -1054,6 +1056,10 @@ class PlaywrightExecutor:
                 export_fmt = action.get("export_format") or action.get("format") or "csv"
                 export_fn = action.get("export_filename") or action.get("filename") or action.get("text")
                 result = await self._execute_export_data(page, target, format=export_fmt, filename=export_fn)
+            elif raw_action in ("fill_form", "autofill", "auto_fill", "fill_persona", "autofill_persona"):
+                persona_id = action.get("persona_id") or target
+                custom_vals = action.get("custom_values")
+                result = await self._execute_fill_form(page, persona_id=persona_id, custom_values=custom_vals)
             elif raw_action == "extract":
                 if url:
                     result = await self._execute_navigate(page, url)
@@ -1083,6 +1089,21 @@ class PlaywrightExecutor:
                     message=f"Unknown or unsupported action type: '{raw_action}'",
                     error="Unsupported action",
                 )
+
+            # If Macro Recorder is active, record this successful step
+            try:
+                from .recorder import macro_recorder
+                if macro_recorder.is_recording and result.success:
+                    macro_recorder.record_step(
+                        action_type=result.action,
+                        target=result.target,
+                        url=action.get("url"),
+                        text=action.get("text"),
+                        key=action.get("key"),
+                        coordinates=action.get("coordinates"),
+                    )
+            except Exception:
+                pass
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             result.duration_ms = duration_ms
@@ -2079,6 +2100,112 @@ class PlaywrightExecutor:
             message="Attempted modal/popup overlay dismissal",
             duration_ms=round(duration, 2),
         )
+
+    async def _execute_fill_form(
+        self,
+        page: Page,
+        persona_id: Optional[str] = None,
+        custom_values: Optional[Dict[str, str]] = None,
+    ) -> ExecutionResult:
+        """Autofill form inputs on active page using smart persona heuristics."""
+        from .persona import persona_vault, execute_smart_autofill, PersonaProfile
+
+        persona = None
+        if persona_id:
+            persona = persona_vault.get_persona(persona_id)
+        if not persona:
+            persona = persona_vault.get_default_persona()
+
+        if custom_values and isinstance(custom_values, dict):
+            p_dict = persona.model_dump()
+            p_dict.setdefault("custom_fields", {}).update(custom_values)
+            persona = PersonaProfile(**p_dict)
+
+        res = await execute_smart_autofill(page, persona)
+        if res.get("success"):
+            filled_count = res.get("filled_count", 0)
+            fields_str = ", ".join(list(res.get("fields", {}).keys())[:4])
+            msg = f"Autofilled {filled_count} form fields using persona '{persona.name}' ({fields_str})"
+            return ExecutionResult(
+                success=True,
+                action_type=ActionType.FILL_FORM,
+                action="fill_form",
+                target=persona.id,
+                message=msg,
+                extracted_data=res.get("fields"),
+            )
+        else:
+            return ExecutionResult(
+                success=False,
+                action_type=ActionType.FILL_FORM,
+                action="fill_form",
+                target=persona.id,
+                message=f"Form autofill failed: {res.get('error', 'No inputs matched')}",
+                error=res.get("error", "Autofill failed"),
+            )
+
+    async def fill_form(
+        self,
+        persona_id: Optional[str] = None,
+        custom_values: Optional[Dict[str, str]] = None,
+    ) -> ExecutionResult:
+        """Autofill form fields using given or default persona."""
+        return await self.execute({
+            "action": "fill_form",
+            "persona_id": persona_id,
+            "custom_values": custom_values,
+        })
+
+    async def connect_cdp(self, cdp_url: Optional[str] = None) -> bool:
+        """Connect directly to an existing Google Chrome instance via CDP."""
+        target_url = cdp_url or getattr(self, "cdp_url", "http://localhost:9222")
+        if not self._playwright:
+            self._playwright = await async_playwright().start()
+
+        try:
+            browser = await self._playwright.chromium.connect_over_cdp(target_url)
+            self._browser = browser
+            self._context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+            self._pages = list(self._context.pages)
+            self._setup_context_listeners(self._context)
+            self.is_cdp_connected = True
+            self.cdp_url = target_url
+            self._owns_browser = False
+            return True
+        except Exception:
+            self.is_cdp_connected = False
+            return False
+
+    async def get_cdp_status(self) -> Dict[str, Any]:
+        """Check if external Chrome DevTools Protocol (CDP) port is responsive."""
+        import httpx
+        url = getattr(self, "cdp_url", "http://localhost:9222").rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=1.5) as client:
+                res = await client.get(f"{url}/json/version")
+                if res.status_code == 200:
+                    v_info = res.json()
+                    tabs_res = await client.get(f"{url}/json/list")
+                    tabs_info = tabs_res.json() if tabs_res.status_code == 200 else []
+                    return {
+                        "available": True,
+                        "connected": getattr(self, "is_cdp_connected", False),
+                        "browser": v_info.get("Browser", "Google Chrome"),
+                        "protocol_version": v_info.get("Protocol-Version", "1.3"),
+                        "open_tabs_count": len(tabs_info),
+                        "cdp_url": url,
+                        "port": 9222,
+                    }
+        except Exception:
+            pass
+        return {
+            "available": False,
+            "connected": getattr(self, "is_cdp_connected", False),
+            "cdp_url": url,
+            "port": 9222,
+            "error": "Chrome is not running with --remote-debugging-port=9222",
+        }
 
     async def close(self) -> None:
         """Tear down browser session, save cookies, and release resources cleanly."""

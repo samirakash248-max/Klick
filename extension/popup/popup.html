@@ -37,6 +37,7 @@
           <select id="exec-mode">
             <option value="intab" selected>In-Tab (Direct)</option>
             <option value="desktop">Desktop Window</option>
+            <option value="cdp">Existing Chrome (CDP)</option>
           </select>
         </div>
       </div>
@@ -63,6 +64,16 @@
           </button>
           <button id="btn-quick-run" class="btn btn-primary">Run</button>
         </div>
+      </div>
+
+      <!-- Quick Action Buttons: Macro Record & Autofill -->
+      <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;">
+        <button id="btn-toggle-record" class="btn btn-sm btn-outline" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 0.35rem;" title="Record natural user interactions into RPA macro">
+          <span id="record-icon" style="color: #ef4444;">⏺</span> <span id="record-text">Record Macro</span>
+        </button>
+        <button id="btn-autofill-persona" class="btn btn-sm btn-outline" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 0.35rem;" title="Smart form autofill with saved persona">
+          <span>👤</span> <span>Autofill Form</span>
+        </button>
       </div>
 
       <!-- User Saved Custom Tasks -->

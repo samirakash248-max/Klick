@@ -447,4 +447,148 @@ class BackendClient:
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
+    # =========================================================================
+    # PERSONA VAULT & SMART FORM AUTOFILL
+    # =========================================================================
+
+    def get_personas(self) -> List[Dict[str, Any]]:
+        """Retrieve all saved personas from vault."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/personas")
+                if res.status_code == 200:
+                    return res.json()
+                return []
+        except Exception:
+            return []
+
+    def get_persona(self, persona_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve single persona profile."""
+        try:
+            with self._client() as client:
+                res = client.get(f"/api/personas/{persona_id}")
+                if res.status_code == 200:
+                    return res.json()
+                return None
+        except Exception:
+            return None
+
+    def save_persona(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Save or update persona in vault."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/personas", json=data)
+                if res.status_code == 200:
+                    return {"success": True, "persona": res.json()}
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def delete_persona(self, persona_id: str) -> Dict[str, Any]:
+        """Delete persona from vault."""
+        try:
+            with self._client() as client:
+                res = client.delete(f"/api/personas/{persona_id}")
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def autofill_persona(self, persona_id: Optional[str] = None, custom_values: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """Trigger smart autofill on active page."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/personas/autofill", json={"persona_id": persona_id, "custom_values": custom_values or {}})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    # =========================================================================
+    # CHROME CDP BRIDGE
+    # =========================================================================
+
+    def get_cdp_status(self) -> Dict[str, Any]:
+        """Get CDP Chrome connection status."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/cdp/status")
+                if res.status_code == 200:
+                    return res.json()
+                return {"available": False, "error": res.text}
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+
+    def connect_cdp(self, cdp_url: Optional[str] = None) -> Dict[str, Any]:
+        """Connect directly to active Chrome via CDP."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/cdp/connect", json={"cdp_url": cdp_url or "http://localhost:9222"})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    # =========================================================================
+    # "WATCH & LEARN" MACRO RECORDER
+    # =========================================================================
+
+    def get_recorder_status(self) -> Dict[str, Any]:
+        """Check macro recorder status."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/recorder/status")
+                if res.status_code == 200:
+                    return res.json()
+                return {"is_recording": False}
+        except Exception:
+            return {"is_recording": False}
+
+    def start_recording(self, name: str = "Recorded Macro", description: str = "") -> Dict[str, Any]:
+        """Start recording macro interactions."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/recorder/start", json={"name": name, "description": description})
+                if res.status_code == 200:
+                    return res.json()
+                return {"status": "error", "error": res.text}
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+
+    def record_step(self, step_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Append step to active macro recording."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/recorder/step", json=step_data)
+                if res.status_code == 200:
+                    return res.json()
+                return {"recorded": False}
+        except Exception:
+            return {"recorded": False}
+
+    def stop_recording(self) -> Dict[str, Any]:
+        """Stop recording and compile into saved macro."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/recorder/stop")
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def cancel_recording(self) -> Dict[str, Any]:
+        """Cancel recording session."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/recorder/cancel")
+                if res.status_code == 200:
+                    return res.json()
+                return {"status": "error"}
+        except Exception:
+            return {"status": "error"}
+
 

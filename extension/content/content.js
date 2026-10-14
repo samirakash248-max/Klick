@@ -10,6 +10,8 @@ const BACKEND_BASE = "http://127.0.0.1:8000";
 let isTaskRunning = false;
 let stopRequested = false;
 let currentHud = null;
+let isRecordingMacro = false;
+let recordingIndicatorEl = null;
 
 // =========================================================================
 // Message Listener
@@ -27,7 +29,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     stopRequested = true;
     sendResponse({ success: true, message: "Stop signal received." });
   } else if (message.action === "get_status") {
-    sendResponse({ isRunning: isTaskRunning });
+    sendResponse({ isRunning: isTaskRunning, isRecordingMacro: isRecordingMacro });
+  } else if (message.action === "start_macro_recording") {
+    startMacroRecordingListeners();
+    sendResponse({ success: true, message: "Macro recording started." });
+  } else if (message.action === "stop_macro_recording") {
+    stopMacroRecordingListeners();
+    sendResponse({ success: true, message: "Macro recording stopped." });
+  } else if (message.action === "autofill_persona") {
+    const filledCount = smartAutofillInTab(message.persona);
+    sendResponse({ success: filledCount > 0, filled_count: filledCount });
   }
   return true;
 });
@@ -537,3 +548,224 @@ function updateHud(step, maxSteps, thought, action, isFinished = false) {
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+// =========================================================================
+// Interactive Macro Recorder Listeners & Selector Generator
+// =========================================================================
+
+function getBestSelector(el) {
+  if (!el || el === document.body || el === document.documentElement) return "body";
+  if (el.id && !/^\d/.test(el.id)) return `#${el.id}`;
+  const agentId = el.getAttribute("data-agent-id");
+  if (agentId) return `[data-agent-id="${agentId}"]`;
+  if (el.name) return `${el.tagName.toLowerCase()}[name="${el.name}"]`;
+  const ph = el.getAttribute("placeholder");
+  if (ph) return `${el.tagName.toLowerCase()}[placeholder="${ph}"]`;
+  const aria = el.getAttribute("aria-label");
+  if (aria) return `[aria-label="${aria}"]`;
+  const tag = el.tagName.toLowerCase();
+  if (el.className && typeof el.className === "string") {
+    const cls = el.className.split(/\s+/).filter(c => c && !c.includes(":") && !c.startsWith("bp-")).slice(0, 2);
+    if (cls.length > 0) return `${tag}.${cls.join(".")}`;
+  }
+  return tag;
+}
+
+function handleMacroClick(e) {
+  if (!isRecordingMacro) return;
+  if (e.target.closest("#bp-agent-hud, #bp-recording-indicator")) return;
+  const target = e.target.closest("button, a, input, select, textarea, [role='button']") || e.target;
+  const sel = getBestSelector(target);
+  const text = (target.innerText || target.value || target.getAttribute("aria-label") || "").trim().slice(0, 50);
+
+  fetch(`${BACKEND_BASE}/api/recorder/step`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action_type: "click",
+      selector: sel,
+      target: target.id || target.name || text.slice(0, 25),
+      text: text,
+      url: window.location.href
+    })
+  }).catch(() => {});
+}
+
+function handleMacroChange(e) {
+  if (!isRecordingMacro) return;
+  if (e.target.closest("#bp-agent-hud, #bp-recording-indicator")) return;
+  const target = e.target;
+  const sel = getBestSelector(target);
+
+  fetch(`${BACKEND_BASE}/api/recorder/step`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action_type: "type",
+      selector: sel,
+      target: target.id || target.name || "",
+      text: target.value || "",
+      url: window.location.href
+    })
+  }).catch(() => {});
+}
+
+function handleMacroKeydown(e) {
+  if (!isRecordingMacro) return;
+  if (e.key === "Enter") {
+    const target = e.target;
+    if (target.closest("#bp-agent-hud, #bp-recording-indicator")) return;
+    const sel = getBestSelector(target);
+
+    fetch(`${BACKEND_BASE}/api/recorder/step`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action_type: "press_key",
+        key: "Enter",
+        selector: sel,
+        target: target.id || target.name || "",
+        url: window.location.href
+      })
+    }).catch(() => {});
+  }
+}
+
+function startMacroRecordingListeners() {
+  isRecordingMacro = true;
+  document.addEventListener("click", handleMacroClick, true);
+  document.addEventListener("change", handleMacroChange, true);
+  document.addEventListener("keydown", handleMacroKeydown, true);
+
+  if (!recordingIndicatorEl) {
+    const badge = document.createElement("div");
+    badge.id = "bp-recording-indicator";
+    badge.style.position = "fixed";
+    badge.style.bottom = "20px";
+    badge.style.left = "20px";
+    badge.style.zIndex = "2147483647";
+    badge.style.background = "rgba(15, 23, 42, 0.92)";
+    badge.style.color = "#ffffff";
+    badge.style.border = "1px solid rgba(239, 68, 68, 0.5)";
+    badge.style.borderRadius = "8px";
+    badge.style.padding = "8px 14px";
+    badge.style.fontFamily = "-apple-system, BlinkMacSystemFont, sans-serif";
+    badge.style.fontSize = "12px";
+    badge.style.fontWeight = "600";
+    badge.style.boxShadow = "0 8px 24px rgba(0,0,0,0.3)";
+    badge.style.display = "flex";
+    badge.style.alignItems = "center";
+    badge.style.gap = "8px";
+    badge.innerHTML = `
+      <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#ef4444; animation: bp-pulse 1s infinite alternate;"></span>
+      <span>Klick RPA Recording Active</span>
+      <span style="font-size: 10px; color: #94a3b8; font-weight: normal;">(Interactions recorded)</span>
+    `;
+    const styleSheet = document.createElement("style");
+    styleSheet.textContent = `@keyframes bp-pulse { 0% { opacity: 0.4; } 100% { opacity: 1; } }`;
+    document.head.appendChild(styleSheet);
+    document.body.appendChild(badge);
+    recordingIndicatorEl = badge;
+  }
+}
+
+function stopMacroRecordingListeners() {
+  isRecordingMacro = false;
+  document.removeEventListener("click", handleMacroClick, true);
+  document.removeEventListener("change", handleMacroChange, true);
+  document.removeEventListener("keydown", handleMacroKeydown, true);
+
+  if (recordingIndicatorEl) {
+    recordingIndicatorEl.remove();
+    recordingIndicatorEl = null;
+  }
+}
+
+// =========================================================================
+// Smart Persona Autofill In-Tab Engine
+// =========================================================================
+
+function smartAutofillInTab(persona) {
+  const data = persona || {
+    first_name: "Samir",
+    last_name: "Developer",
+    full_name: "Samir Developer",
+    email: "samir.dev@example.com",
+    phone: "555-0199",
+    company: "Acme Cloud Inc.",
+    job_title: "Senior AI Engineer",
+    address: "123 Tech Plaza, Suite 400",
+    city: "San Francisco",
+    state: "CA",
+    postal_code: "94105",
+    country: "United States",
+    username: "samir_dev",
+    password: "SecurePassword123!",
+    website: "https://example.com",
+    notes: "Automated test submission via Klick AI persona vault."
+  };
+
+  const fieldsMap = [
+    { key: "email", re: /(email|mail|e-mail)/i },
+    { key: "password", re: /(password|passwd|pwd)/i },
+    { key: "phone", re: /(phone|tel|mobile|cell)/i },
+    { key: "first_name", re: /(first.*name|fname|given.*name)/i },
+    { key: "last_name", re: /(last.*name|lname|sur.*name|family.*name)/i },
+    { key: "full_name", re: /(full.*name|name|contact.*name)/i },
+    { key: "company", re: /(company|organization|org|business|employer)/i },
+    { key: "job_title", re: /(title|job|role|occupation|position)/i },
+    { key: "address", re: /(address|street|addr)/i },
+    { key: "city", re: /(city|town|municipality)/i },
+    { key: "state", re: /(state|province|region)/i },
+    { key: "postal_code", re: /(zip|postal|pincode|postcode)/i },
+    { key: "country", re: /(country|nation)/i },
+    { key: "username", re: /(username|user|login)/i },
+    { key: "website", re: /(website|url|web|domain)/i },
+    { key: "notes", re: /(notes|comments|message|bio|description|about)/i }
+  ];
+
+  const inputs = Array.from(document.querySelectorAll("input:not([type='hidden']):not([type='submit']):not([type='button']), textarea, select"));
+  let filledCount = 0;
+
+  for (const el of inputs) {
+    if (el.closest("#bp-agent-hud, #bp-recording-indicator")) continue;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+
+    const identifier = `${el.id || ''} ${el.name || ''} ${el.placeholder || ''} ${el.getAttribute('aria-label') || ''} ${el.autocomplete || ''}`.toLowerCase();
+    
+    // Find closest label text if available
+    let labelText = "";
+    if (el.id) {
+      const lbl = document.querySelector(`label[for="${el.id}"]`);
+      if (lbl) labelText = lbl.innerText.toLowerCase();
+    }
+    const fullDescriptor = `${identifier} ${labelText}`;
+
+    for (const mapping of fieldsMap) {
+      if (mapping.re.test(fullDescriptor)) {
+        const val = data[mapping.key] || data.custom_fields?.[mapping.key];
+        if (val) {
+          el.value = val;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+
+          // Visual green glow feedback
+          const prevBorder = el.style.borderColor;
+          el.style.borderColor = "#10b981";
+          el.style.boxShadow = "0 0 0 3px rgba(16, 185, 129, 0.25)";
+          setTimeout(() => {
+            el.style.borderColor = prevBorder;
+            el.style.boxShadow = "";
+          }, 3000);
+
+          filledCount++;
+          break;
+        }
+      }
+    }
+  }
+
+  return filledCount;
+}
+

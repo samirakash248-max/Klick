@@ -847,6 +847,157 @@ async def inspect_visual_page(payload: Dict[str, Any] = Body(default_factory=dic
 
 
 # =====================================================================
+# PERSONA VAULT & SMART FORM AUTOFILL ENDPOINTS
+# =====================================================================
+
+@app.get("/api/personas")
+async def list_personas():
+    """List all stored personas in the persona vault."""
+    from .persona import persona_vault
+    return [p.model_dump() for p in persona_vault.list_personas()]
+
+
+@app.get("/api/personas/{persona_id}")
+async def get_persona(persona_id: str):
+    """Retrieve details for a specific persona."""
+    from .persona import persona_vault
+    p = persona_vault.get_persona(persona_id)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"Persona '{persona_id}' not found")
+    return p.model_dump()
+
+
+@app.post("/api/personas")
+async def save_persona(payload: Dict[str, Any] = Body(...)):
+    """Create or update a persona profile in the vault."""
+    from .persona import persona_vault, PersonaProfile
+    try:
+        profile = PersonaProfile(**payload)
+        saved = persona_vault.save_persona(profile)
+        return saved.model_dump()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid persona data: {exc}")
+
+
+@app.delete("/api/personas/{persona_id}")
+async def delete_persona(persona_id: str):
+    """Delete a persona profile from the vault."""
+    from .persona import persona_vault
+    deleted = persona_vault.delete_persona(persona_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Persona '{persona_id}' not found")
+    return {"success": True, "message": f"Persona '{persona_id}' deleted successfully"}
+
+
+@app.post("/api/personas/autofill")
+async def trigger_smart_autofill(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Autofill form fields on the active browser page using specified or default persona."""
+    async with get_browser_lock():
+        page = executor.current_page
+        if not page or page.is_closed():
+            raise HTTPException(status_code=400, detail="No active browser page open for autofill")
+        persona_id = payload.get("persona_id")
+        custom_vals = payload.get("custom_values")
+        res = await executor._execute_fill_form(page, persona_id=persona_id, custom_values=custom_vals)
+        return res.model_dump()
+
+
+# =====================================================================
+# CHROME DEVTOOLS PROTOCOL (CDP) BRIDGE ENDPOINTS
+# =====================================================================
+
+@app.get("/api/cdp/status")
+async def get_cdp_status():
+    """Check connectivity to external Google Chrome browser via CDP (--remote-debugging-port=9222)."""
+    return await executor.get_cdp_status()
+
+
+@app.post("/api/cdp/connect")
+async def connect_cdp_bridge(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Connect Klick directly to existing running Chrome instance via CDP."""
+    async with get_browser_lock():
+        cdp_url = payload.get("cdp_url") or "http://localhost:9222"
+        success = await executor.connect_cdp(cdp_url)
+        if success:
+            return {
+                "success": True,
+                "message": f"Successfully connected to Chrome via CDP at {cdp_url}",
+                "cdp_url": cdp_url,
+            }
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to connect to Chrome at {cdp_url}. Ensure Chrome is running with flag --remote-debugging-port=9222",
+            )
+
+
+# =====================================================================
+# "WATCH & LEARN" INTERACTIVE MACRO RECORDER ENDPOINTS
+# =====================================================================
+
+@app.get("/api/recorder/status")
+async def get_recorder_status():
+    """Retrieve current interactive macro recording status."""
+    from .recorder import macro_recorder
+    return macro_recorder.get_status()
+
+
+@app.post("/api/recorder/start")
+async def start_macro_recording(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Start an interactive macro recording session."""
+    from .recorder import macro_recorder
+    name = payload.get("name") or "Interactive Recorded Macro"
+    description = payload.get("description") or "Recorded by user interaction"
+    macro_id = payload.get("macro_id")
+    return macro_recorder.start_recording(name=name, description=description, macro_id=macro_id)
+
+
+@app.post("/api/recorder/step")
+async def record_macro_step(payload: Dict[str, Any] = Body(...)):
+    """Record a user interaction step (from Chrome extension or dashboard)."""
+    from .recorder import macro_recorder
+    if not macro_recorder.is_recording:
+        return {"recorded": False, "message": "Recorder is not active"}
+
+    action_type = payload.get("action_type") or payload.get("action") or "click"
+    step = macro_recorder.record_step(
+        action_type=action_type,
+        target=payload.get("target"),
+        selector=payload.get("selector"),
+        text=payload.get("text"),
+        url=payload.get("url"),
+        key=payload.get("key"),
+        coordinates=payload.get("coordinates"),
+        parameter_key=payload.get("parameter_key"),
+    )
+    return {"recorded": step is not None, "step": step.model_dump() if step else None}
+
+
+@app.post("/api/recorder/stop")
+async def stop_macro_recording():
+    """Stop recording session and compile steps into a saved MacroDefinition."""
+    from .recorder import macro_recorder
+    macro = macro_recorder.stop_recording()
+    if not macro:
+        raise HTTPException(status_code=400, detail="No active recording session or no steps recorded")
+    return {
+        "success": True,
+        "name": macro.name,
+        "step_count": len(macro.steps),
+        "steps": [s.model_dump() for s in macro.steps],
+        "message": f"Successfully compiled and saved macro '{macro.name}' with {len(macro.steps)} steps",
+        "macro": macro.model_dump(),
+    }
+
+
+@app.post("/api/recorder/cancel")
+async def cancel_macro_recording():
+    """Cancel the active recording session without saving."""
+    from .recorder import macro_recorder
+    return macro_recorder.cancel_recording()
+
+
+# =====================================================================
 # EXTENSION IN-TAB EXECUTION ENDPOINTS (NO EXTRA CHROMIUM WINDOW)
 # =====================================================================
 

@@ -1,6 +1,6 @@
 """Full Live Audit & Verification Script for Klick Browser Agent.
 
-Audits and verifies all 10 improvements end-to-end:
+Audits and verifies all 13 improvements end-to-end:
 1. Visual Grounding & Dual Engine Execution
 2. Multi-Tab & Popup Management (new_tab, switch_tab, close_tab)
 3. Persistent Profiles & Session Restore (cookies.json, storage)
@@ -11,6 +11,9 @@ Audits and verifies all 10 improvements end-to-end:
 8. Voice Navigation & Omnibox Chrome Extension Integration
 9. Hybrid Intelligent Model Routing (Local Fast, Cloud Turbo, Auto Fallback)
 10. Multimodal Set-of-Mark Visual Grounding & Coordinate Targeting Engine
+11. Encrypted Persona Vault & Smart Form Auto-Filler
+12. Direct Chrome DevTools Protocol (CDP) Bridge (:9222)
+13. "Watch & Learn" Interactive RPA Macro Recorder
 """
 
 import asyncio
@@ -35,6 +38,14 @@ from backend.app.executor import (
 from backend.app.macros import MacroDefinition, MacroStep, macro_manager
 from backend.app.model_client import HybridModelRouter, ModelTier
 from backend.app.observer import PlaywrightObserver
+from backend.app.persona import (
+    PersonaProfile,
+    PersonaVaultManager,
+    execute_smart_autofill,
+    match_field_to_persona_key,
+    persona_vault,
+)
+from backend.app.recorder import MacroRecorder, macro_recorder
 from backend.app.safety import SafetyGuard
 from backend.app.schemas import ActionType, BrowserAction, ElementCoordinates, PageObservation, RunStatus
 from backend.app.visual import (
@@ -313,11 +324,82 @@ async def run_full_audit():
         print(f"  [OK] Set-of-Mark overlay injected ({obs_visual.visual_elements_count} badges), screenshots captured, mark resolved, coordinate click executed")
         audit_results["10_som_visual_grounding"] = "PASSED"
 
+        # -----------------------------------------------------------------
+        # AUDIT 11: PERSONA VAULT & SMART FORM AUTO-FILLER
+        # -----------------------------------------------------------------
+        print("\n[AUDIT 11/13] Testing Persona Vault & Smart Form Auto-Filler...")
+        personas = persona_vault.list_personas()
+        assert len(personas) >= 2, f"Expected at least 2 default personas, found {len(personas)}"
+        samir = persona_vault.get_persona("samir_developer")
+        assert samir is not None, "Samir developer profile not found"
+        assert "samir" in samir.email
+
+        # Heuristic field matcher checks
+        assert match_field_to_persona_key("first_name", "First Name", "text") == "first_name"
+        assert match_field_to_persona_key("user_email", "Email", "email") == "email"
+        assert match_field_to_persona_key("mobile_phone", "Phone", "tel") == "phone"
+        assert match_field_to_persona_key("company_org", "Organization", "text") == "company"
+        assert match_field_to_persona_key("postal_zip", "Zip Code", "text") == "postal_code"
+
+        # Fill form on live page
+        fill_res = await executor.fill_form(persona_id="samir_developer")
+        assert fill_res.success is True, f"Smart form autofill failed: {fill_res.message}"
+        print(f"  [OK] Persona vault profiles validated, heuristic matching verified, autofill executed: {fill_res.message}")
+        audit_results["11_persona_vault_autofill"] = "PASSED"
+
+        # -----------------------------------------------------------------
+        # AUDIT 12: CHROME DEVTOOLS PROTOCOL (CDP) BRIDGE
+        # -----------------------------------------------------------------
+        print("\n[AUDIT 12/13] Testing Chrome DevTools Protocol (CDP) Bridge...")
+        cdp_stat = await executor.get_cdp_status()
+        assert "port" in cdp_stat and cdp_stat["port"] == 9222
+        assert "available" in cdp_stat
+        assert "connected" in cdp_stat
+
+        # Test executor window focus helper
+        focus_res = await executor.focus_window()
+        assert focus_res.success is True, f"Focus window failed: {focus_res.message}"
+        print(f"  [OK] CDP bridge status check (:9222) verified, desktop focus mechanism validated: {focus_res.message}")
+        audit_results["12_cdp_remote_debugging"] = "PASSED"
+
+        # -----------------------------------------------------------------
+        # AUDIT 13: "WATCH & LEARN" INTERACTIVE RPA MACRO RECORDER
+        # -----------------------------------------------------------------
+        print("\n[AUDIT 13/13] Testing 'Watch & Learn' Interactive Macro Recorder...")
+        test_rec = MacroRecorder()
+        test_rec.start_recording(name="Audit Checkout Macro", description="Audit test")
+        assert test_rec.is_recording is True
+
+        test_rec.record_step(action_type="navigate", url=tasks_html)
+        test_rec.record_step(action_type="click", selector="input#search", target="search-input")
+        # Typing deduplication check
+        test_rec.record_step(action_type="type", selector="input#search", text="in")
+        test_rec.record_step(action_type="type", selector="input#search", text="voice")
+        assert len(test_rec.steps) == 3, f"Expected 3 consolidated steps, got {len(test_rec.steps)}"
+        assert test_rec.steps[-1].text == "invoice"
+
+        compiled = test_rec.stop_recording()
+        assert test_rec.is_recording is False
+        assert len(compiled.steps) == 3
+
+        # Verify extension popup & content integration files
+        popup_html_text = (REPO_ROOT / "extension" / "popup" / "popup.html").read_text(encoding="utf-8")
+        popup_js_text = (REPO_ROOT / "extension" / "popup" / "popup.js").read_text(encoding="utf-8")
+        content_js_text = (REPO_ROOT / "extension" / "content" / "content.js").read_text(encoding="utf-8")
+        assert "btn-toggle-record" in popup_html_text
+        assert "btn-autofill-persona" in popup_html_text
+        assert "setupMacroAndAutofill" in popup_js_text
+        assert "startMacroRecordingListeners" in content_js_text
+        assert "smartAutofillInTab" in content_js_text
+
+        print(f"  [OK] Interactive Macro Recorder compiled {len(compiled.steps)} steps, typing consolidated, extension hooks verified")
+        audit_results["13_watch_and_learn_recorder"] = "PASSED"
+
     finally:
         await executor.close()
 
     print("\n" + "=" * 80)
-    print("AUDIT SUMMARY: ALL 10 IMPROVEMENTS VERIFIED")
+    print("AUDIT SUMMARY: ALL 13 IMPROVEMENTS VERIFIED")
     print("=" * 80)
     for k, status in sorted(audit_results.items()):
         print(f"  {k:35} : {status}")

@@ -53,6 +53,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupQuickRun();
   setupVoiceNavigation();
   setupMonitorActions();
+  setupMacroAndAutofill();
 
   await detectActiveTab();
   await checkBackendStatus();
@@ -357,8 +358,21 @@ async function executeGoal(goal, startUrl, maxSteps = 10) {
     }
   }
 
-  // 2. Desktop runner mode: submit to FastAPI backend
+  // 2. Desktop or CDP runner mode: submit to FastAPI backend
   try {
+    if (execMode === "cdp") {
+      if (monitorAction) monitorAction.textContent = "Connecting to Chrome via CDP (Port 9222)...";
+      try {
+        await fetch(`${BACKEND_BASE}/api/cdp/connect`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cdp_url: "http://localhost:9222" })
+        });
+      } catch (cdpErr) {
+        console.warn("CDP connect attempt warning:", cdpErr);
+      }
+    }
+
     const res = await fetch(`${BACKEND_BASE}/api/agent/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -581,3 +595,129 @@ function setupVoiceNavigation() {
     console.warn("Speech recognition initialization failed:", err);
   }
 }
+
+// =========================================================================
+// Macro Recorder & Smart Persona Autofill
+// =========================================================================
+
+function setupMacroAndAutofill() {
+  const recordBtn = document.getElementById("btn-toggle-record");
+  const recordIcon = document.getElementById("record-icon");
+  const recordText = document.getElementById("record-text");
+  const autofillBtn = document.getElementById("btn-autofill-persona");
+
+  let isRecording = false;
+
+  async function refreshRecorderStatus() {
+    try {
+      const res = await fetch(`${BACKEND_BASE}/api/recorder/status`, { signal: AbortSignal.timeout(1200) });
+      if (res.ok) {
+        const data = await res.json();
+        isRecording = !!data.is_recording;
+        if (recordBtn && recordIcon && recordText) {
+          if (isRecording) {
+            recordIcon.textContent = "⏹";
+            recordIcon.style.color = "#3b82f6";
+            recordText.textContent = `Stop (${data.step_count || 0})`;
+            recordBtn.style.borderColor = "#3b82f6";
+            recordBtn.style.color = "#38bdf8";
+          } else {
+            recordIcon.textContent = "⏺";
+            recordIcon.style.color = "#ef4444";
+            recordText.textContent = "Record Macro";
+            recordBtn.style.borderColor = "";
+            recordBtn.style.color = "";
+          }
+        }
+      }
+    } catch {}
+  }
+  refreshRecorderStatus();
+
+  if (recordBtn) {
+    recordBtn.addEventListener("click", async () => {
+      try {
+        if (!isRecording) {
+          const defaultName = currentTab?.title ? `Macro - ${currentTab.title.slice(0, 24)}` : "Interactive Macro";
+          const macroName = prompt("Enter a name for this RPA Macro:", defaultName);
+          if (macroName === null) return;
+
+          const res = await fetch(`${BACKEND_BASE}/api/recorder/start`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: macroName.trim() || defaultName })
+          });
+          if (res.ok) {
+            isRecording = true;
+            if (recordIcon) { recordIcon.textContent = "⏹"; recordIcon.style.color = "#3b82f6"; }
+            if (recordText) recordText.textContent = "Stop (0)";
+            recordBtn.style.borderColor = "#3b82f6";
+            recordBtn.style.color = "#38bdf8";
+
+            if (currentTab?.id) {
+              chrome.tabs.sendMessage(currentTab.id, { action: "start_macro_recording" }).catch(() => {});
+            }
+          }
+        } else {
+          const res = await fetch(`${BACKEND_BASE}/api/recorder/stop`, { method: "POST" });
+          if (res.ok) {
+            const data = await res.json();
+            isRecording = false;
+            if (recordIcon) { recordIcon.textContent = "⏺"; recordIcon.style.color = "#ef4444"; }
+            if (recordText) recordText.textContent = "Record Macro";
+            recordBtn.style.borderColor = "";
+            recordBtn.style.color = "";
+
+            if (currentTab?.id) {
+              chrome.tabs.sendMessage(currentTab.id, { action: "stop_macro_recording" }).catch(() => {});
+            }
+            alert(`Macro '${data.name || "Macro"}' saved successfully with ${data.step_count || 0} steps!`);
+          }
+        }
+      } catch (err) {
+        alert("Macro recorder error: " + err.message);
+      }
+    });
+  }
+
+  if (autofillBtn) {
+    autofillBtn.addEventListener("click", async () => {
+      const execMode = document.getElementById("exec-mode")?.value || "intab";
+      try {
+        const pRes = await fetch(`${BACKEND_BASE}/api/personas`, { signal: AbortSignal.timeout(2000) });
+        let personas = [];
+        if (pRes.ok) {
+          personas = await pRes.json();
+        }
+        const activePersona = personas.length > 0 ? personas[0] : null;
+
+        if (execMode === "intab" && currentTab?.id) {
+          const tabRes = await chrome.tabs.sendMessage(currentTab.id, {
+            action: "autofill_persona",
+            persona: activePersona
+          });
+          if (tabRes && tabRes.success) {
+            alert(`Smart autofill filled ${tabRes.filled_count || 0} form fields in this tab!`);
+          } else {
+            alert("No matching form inputs detected on active page.");
+          }
+        } else {
+          const afRes = await fetch(`${BACKEND_BASE}/api/personas/autofill`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ persona_id: activePersona?.id })
+          });
+          const afData = await afRes.json();
+          if (afData.success) {
+            alert(afData.message || "Form fields autofilled successfully!");
+          } else {
+            alert("Autofill result: " + (afData.error || afData.message || "Done"));
+          }
+        }
+      } catch (err) {
+        alert("Autofill error: " + err.message);
+      }
+    });
+  }
+}
+

@@ -138,12 +138,14 @@ render_sidebar(backend_client, ollama_service)
 
 
 # 5. Top Navigation & Tabs
-tab_agent, tab_playground, tab_exports, tab_events = st.tabs([
+tab_agent, tab_personas, tab_playground, tab_exports, tab_events = st.tabs([
     "Agent Control",
+    "Persona Vault & Autofill",
     "Model Playground",
     "Data Exports",
     "Event Telemetry",
 ])
+
 
 
 # =====================================================================
@@ -271,7 +273,141 @@ with tab_agent:
 
 
 # =====================================================================
-# TAB 2: OLLAMA MODEL PLAYGROUND
+# TAB 2: PERSONA VAULT & SMART FORM AUTOFILL
+# =====================================================================
+with tab_personas:
+    st.subheader("Persona Vault & Smart Form Auto-Filler")
+    st.caption("Manage stored identity profiles for rapid, 1-click test automation and registration form filling.")
+
+    personas = backend_client.get_personas()
+
+    # 1. Quick Autofill Trigger Bar
+    with st.container():
+        st.markdown("**1-Click Page Autofill**")
+        col_p1, col_p2 = st.columns([3, 1])
+        with col_p1:
+            persona_options = {p.get("id"): f"{p.get('name', 'Persona')} ({p.get('email', 'No email')})" for p in personas} if personas else {}
+            sel_pid = st.selectbox(
+                "Active Persona for Autofill",
+                options=list(persona_options.keys()) if persona_options else ["default"],
+                format_func=lambda x: persona_options.get(x, x),
+                key="tab_persona_autofill_select",
+                label_visibility="collapsed",
+            ) if persona_options else None
+        with col_p2:
+            if st.button("⚡ Autofill Active Page", key="tab_persona_autofill_btn", type="primary", use_container_width=True):
+                with st.spinner("Analyzing form fields and autofilling..."):
+                    af_res = backend_client.autofill_persona(persona_id=sel_pid)
+                if af_res.get("success"):
+                    st.success(af_res.get("message", "Form fields autofilled successfully!"))
+                else:
+                    st.warning(f"Autofill notice: {af_res.get('error') or af_res.get('message', 'No form inputs found')}")
+
+    st.divider()
+
+    # 2. Persona Profiles Browser & Details
+    col_list, col_details = st.columns([1, 2])
+    with col_list:
+        st.markdown(f"**Saved Profiles ({len(personas)})**")
+        if personas:
+            p_names = [p.get("name", p.get("id")) for p in personas]
+            sel_p_idx = st.radio("Select Profile", options=range(len(personas)), format_func=lambda i: p_names[i], label_visibility="collapsed")
+            selected_p = personas[sel_p_idx]
+        else:
+            st.info("No personas in vault yet.")
+            selected_p = None
+
+    with col_details:
+        if selected_p:
+            st.markdown(f"### {selected_p.get('name', 'Profile Details')}")
+            st.caption(f"ID: `{selected_p.get('id')}`")
+
+            d_col1, d_col2 = st.columns(2)
+            with d_col1:
+                st.markdown(f"**First Name:** {selected_p.get('first_name', '-')}")
+                st.markdown(f"**Last Name:** {selected_p.get('last_name', '-')}")
+                st.markdown(f"**Email:** `{selected_p.get('email', '-')}`")
+                st.markdown(f"**Phone:** {selected_p.get('phone', '-')}")
+                st.markdown(f"**Company:** {selected_p.get('company', '-')}")
+                st.markdown(f"**Job Title:** {selected_p.get('job_title', '-')}")
+            with d_col2:
+                st.markdown(f"**Address:** {selected_p.get('address', '-')}")
+                st.markdown(f"**City:** {selected_p.get('city', '-')}")
+                st.markdown(f"**State:** {selected_p.get('state', '-')}")
+                st.markdown(f"**Postal Code:** {selected_p.get('postal_code', '-')}")
+                st.markdown(f"**Country:** {selected_p.get('country', '-')}")
+                st.markdown(f"**Username:** `{selected_p.get('username', '-')}`")
+
+            if selected_p.get("notes"):
+                st.info(f"**Notes:** {selected_p.get('notes')}")
+
+            if selected_p.get("custom_fields"):
+                with st.expander("Custom Fields", expanded=False):
+                    st.json(selected_p.get("custom_fields"))
+
+            if st.button("🗑️ Delete Persona", key=f"del_persona_{selected_p.get('id')}"):
+                backend_client.delete_persona(selected_p.get("id"))
+                st.toast(f"Deleted persona {selected_p.get('name')}")
+                st.rerun()
+
+    st.divider()
+
+    # 3. Create or Update Persona Profile
+    with st.expander("➕ Create New Persona Profile", expanded=False):
+        with st.form("create_persona_form"):
+            c_f1, c_f2 = st.columns(2)
+            with c_f1:
+                new_id = st.text_input("Profile ID (unique)", placeholder="e.g. finance_persona")
+                new_name = st.text_input("Display Name", placeholder="e.g. Finance Admin")
+                new_fname = st.text_input("First Name", placeholder="e.g. Alex")
+                new_lname = st.text_input("Last Name", placeholder="e.g. Mercer")
+                new_email = st.text_input("Email", placeholder="e.g. alex.mercer@example.com")
+                new_phone = st.text_input("Phone", placeholder="e.g. +1-555-0188")
+                new_company = st.text_input("Company", placeholder="e.g. Apex Financial")
+                new_job = st.text_input("Job Title", placeholder="e.g. Controller")
+            with c_f2:
+                new_addr = st.text_input("Street Address", placeholder="e.g. 500 Market St")
+                new_city = st.text_input("City", placeholder="e.g. San Francisco")
+                new_state = st.text_input("State", placeholder="e.g. CA")
+                new_zip = st.text_input("Postal Code", placeholder="e.g. 94105")
+                new_country = st.text_input("Country", placeholder="e.g. United States")
+                new_user = st.text_input("Username", placeholder="e.g. amercer")
+                new_pwd = st.text_input("Password", type="password", placeholder="e.g. SecurePass123!")
+                new_notes = st.text_input("Notes", placeholder="Test profile for financial forms")
+
+            submit_persona = st.form_submit_button("Save Persona to Vault", type="primary", use_container_width=True)
+            if submit_persona:
+                if not new_id or not new_name:
+                    st.error("Please provide both a Profile ID and Display Name.")
+                else:
+                    new_profile_data = {
+                        "id": new_id.strip(),
+                        "name": new_name.strip(),
+                        "first_name": new_fname.strip(),
+                        "last_name": new_lname.strip(),
+                        "email": new_email.strip(),
+                        "phone": new_phone.strip(),
+                        "company": new_company.strip(),
+                        "job_title": new_job.strip(),
+                        "address": new_addr.strip(),
+                        "city": new_city.strip(),
+                        "state": new_state.strip(),
+                        "postal_code": new_zip.strip(),
+                        "country": new_country.strip(),
+                        "username": new_user.strip(),
+                        "password": new_pwd.strip(),
+                        "notes": new_notes.strip(),
+                    }
+                    save_res = backend_client.save_persona(new_profile_data)
+                    if save_res.get("success"):
+                        st.success(f"Persona '{new_name}' saved to vault successfully!")
+                        st.rerun()
+                    else:
+                        st.error(f"Error saving persona: {save_res.get('error')}")
+
+
+# =====================================================================
+# TAB 3: OLLAMA MODEL PLAYGROUND
 # =====================================================================
 with tab_playground:
     st.subheader("Ollama Direct Model Playground")

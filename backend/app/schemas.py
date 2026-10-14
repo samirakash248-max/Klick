@@ -30,6 +30,7 @@ class ActionType(str, Enum):
     NEW_TAB = "new_tab"
     CLOSE_TAB = "close_tab"
     GO_BACK = "go_back"
+    FILL_FORM = "fill_form"
     FINISH = "finish"
     FAIL = "fail"
 
@@ -180,6 +181,14 @@ class BrowserAction(BaseModel):
     visual_mark: Optional[str] = Field(
         default=None,
         description="Optional Set-of-Mark visual label (e.g. '[0]', '0', 'elem-0')"
+    )
+    persona_id: Optional[str] = Field(
+        default=None,
+        description="Optional persona profile ID to use for smart form autofill"
+    )
+    custom_values: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Optional custom field key-value pairs for form filling"
     )
 
 
@@ -592,6 +601,7 @@ class ExtensionStepResponse(BaseModel):
 
 class MacroStep(BaseModel):
     """Atomic step in a deterministic RPA macro."""
+    step_number: Optional[int] = Field(default=None, description="Sequential step index in macro")
     action_type: Union[ActionType, str] = Field(..., description="Action type to perform")
     target: Optional[str] = Field(default=None, description="Target data-agent-id or identifier")
     selector: Optional[str] = Field(default=None, description="CSS or text selector")

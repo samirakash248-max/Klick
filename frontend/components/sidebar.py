@@ -159,6 +159,33 @@ def render_sidebar(backend_client: BackendClient, ollama_service: OllamaService)
                     backend_client.open_in_system_browser()
                     st.toast("Opened current tab in system browser!")
 
+            # Direct Chrome DevTools Protocol (CDP) Bridge
+            cdp_info = backend_client.get_cdp_status()
+            cdp_connected = cdp_info.get("connected", False)
+            cdp_avail = cdp_info.get("available", False)
+            cdp_color = "#16a34a" if cdp_connected else ("#3b82f6" if cdp_avail else "#64748b")
+            cdp_label = "CDP Connected" if cdp_connected else ("Chrome CDP Ready" if cdp_avail else "CDP Bridge (:9222)")
+
+            st.markdown(
+                f"""
+                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-left: 3px solid {cdp_color}; border-radius: 4px; padding: 0.4rem 0.6rem; margin-top: 0.5rem; margin-bottom: 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: 600; font-size: 0.8rem; color: {cdp_color};">{cdp_label}</span>
+                        <span style="font-size: 0.72rem; color: #64748b;">Port 9222</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if not cdp_connected:
+                if st.button("🔗 Connect Chrome via CDP", key="sidebar_connect_cdp_btn", use_container_width=True):
+                    res = backend_client.connect_cdp()
+                    if res.get("success"):
+                        st.toast("Connected to existing Chrome instance via CDP!")
+                    else:
+                        st.warning(f"Could not connect: {res.get('error', 'Is Chrome running with --remote-debugging-port=9222?')}")
+                    st.rerun()
+
             # Profile Clear Option
             if st.button("Clear Profile & Cookies", key="sidebar_clear_prof_btn", use_container_width=True):
                 backend_client.clear_profile()
@@ -175,6 +202,41 @@ def render_sidebar(backend_client: BackendClient, ollama_service: OllamaService)
                 """,
                 unsafe_allow_html=True,
             )
+
+            # "Watch & Learn" Interactive Macro Recorder
+            rec_status = backend_client.get_recorder_status()
+            is_rec = rec_status.get("is_recording", False)
+            step_cnt = rec_status.get("step_count", 0)
+
+            st.markdown(
+                f"""
+                <div style="background: {'#fef2f2' if is_rec else '#f8fafc'}; border: 1px solid {'#f87171' if is_rec else '#e2e8f0'}; border-radius: 4px; padding: 0.45rem 0.6rem; margin-bottom: 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: 600; font-size: 0.8rem; color: {'#dc2626' if is_rec else '#475569'};">
+                            {'🔴 Recording Macro...' if is_rec else 'Interactive RPA Recorder'}
+                        </span>
+                        <span style="font-size: 0.72rem; color: #64748b;">{step_cnt} steps</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            if is_rec:
+                if st.button("⏹ Stop & Save Macro", key="sidebar_stop_rec_btn", use_container_width=True, type="primary"):
+                    saved_m = backend_client.stop_recording()
+                    if saved_m.get("id"):
+                        st.toast(f"Saved recorded macro '{saved_m.get('name')}' ({saved_m.get('step_count')} steps)!")
+                    st.rerun()
+            else:
+                with st.popover("⏺ Start Interactive Recording"):
+                    live_rec_name = st.text_input("Macro Name", placeholder="e.g. Fill Checkout Form", key="pop_live_rec_name")
+                    live_rec_desc = st.text_input("Description", placeholder="User recorded workflow", key="pop_live_rec_desc")
+                    if st.button("Begin Recording", key="pop_begin_rec_btn", use_container_width=True):
+                        backend_client.start_recording(name=live_rec_name or "Interactive Macro", description=live_rec_desc or "")
+                        st.toast("Recording started! Interact with browser or extension.")
+                        st.rerun()
+
             macros = backend_client.get_macros()
             if macros:
                 macro_names = {m.get("id"): f"{m.get('name', 'Macro')} ({len(m.get('steps', []))} steps)" for m in macros}
