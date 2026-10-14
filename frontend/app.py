@@ -315,7 +315,10 @@ with tab_agent:
         render_action_timeline(history=history, events=events)
 
     with col_obs:
-        render_page_observation(observation, backend_client=backend_client)
+        try:
+            render_page_observation(observation, backend_client=backend_client)
+        except TypeError:
+            render_page_observation(observation)
 
     # Post-Run Summary
     render_run_summary(agent_state)

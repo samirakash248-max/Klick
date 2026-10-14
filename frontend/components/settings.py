@@ -12,8 +12,10 @@ except (ImportError, ValueError):
 
 
 def render_page_observation(
-    obs: Optional[Dict[str, Any]],
+    obs: Optional[Dict[str, Any]] = None,
     backend_client: Optional[BackendClient] = None,
+    *args,
+    **kwargs,
 ) -> None:
     """Render the latest structured browser observation from PlaywrightObserver."""
     st.subheader("Current Page Observation")
