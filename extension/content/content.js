@@ -769,3 +769,139 @@ function smartAutofillInTab(persona) {
   return filledCount;
 }
 
+// =========================================================================
+// In-Tab Voice Navigation Overlay & Keyboard Shortcut (Alt+Shift+V)
+// =========================================================================
+
+let voiceRecognition = null;
+let voiceOverlayEl = null;
+
+function toggleVoiceCommandOverlay() {
+  if (voiceOverlayEl) {
+    closeVoiceCommandOverlay();
+    return;
+  }
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert("Klick AI: Web Speech API is not supported in this browser tab.");
+    return;
+  }
+
+  voiceOverlayEl = document.createElement("div");
+  voiceOverlayEl.id = "bp-voice-overlay";
+  voiceOverlayEl.innerHTML = `
+    <div class="bp-voice-card">
+      <div class="bp-voice-header">
+        <div class="bp-voice-brand">
+          <div class="bp-voice-mic-badge">🎙️</div>
+          <div>
+            <div class="bp-voice-title">Klick Voice Dictation</div>
+            <div class="bp-voice-status" id="bp-voice-status">Listening... speak your automation goal</div>
+          </div>
+        </div>
+        <button class="bp-voice-close-btn" id="bp-voice-close" title="Close (Esc)">✕</button>
+      </div>
+      <div class="bp-voice-body">
+        <div class="bp-voice-transcript" id="bp-voice-transcript">Speak clearly (e.g. "search for casetoo and play first video")...</div>
+      </div>
+      <div class="bp-voice-actions">
+        <button class="bp-voice-btn-sec" id="bp-voice-cancel">Cancel</button>
+        <button class="bp-voice-btn-prim" id="bp-voice-run" disabled>⚡ Run Command</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(voiceOverlayEl);
+
+  const statusEl = document.getElementById("bp-voice-status");
+  const transcriptEl = document.getElementById("bp-voice-transcript");
+  const runBtn = document.getElementById("bp-voice-run");
+  const closeBtn = document.getElementById("bp-voice-close");
+  const cancelBtn = document.getElementById("bp-voice-cancel");
+
+  let recordedGoal = "";
+
+  function handleExecute() {
+    if (!recordedGoal || !recordedGoal.trim()) return;
+    const goalToRun = recordedGoal.trim();
+    closeVoiceCommandOverlay();
+    startInTabTask(goalToRun, 10, "llama3.2:3b");
+  }
+
+  runBtn.addEventListener("click", handleExecute);
+  closeBtn.addEventListener("click", closeVoiceCommandOverlay);
+  cancelBtn.addEventListener("click", closeVoiceCommandOverlay);
+
+  try {
+    voiceRecognition = new SpeechRecognition();
+    voiceRecognition.continuous = false;
+    voiceRecognition.interimResults = true;
+    voiceRecognition.lang = "en-US";
+
+    voiceRecognition.onstart = () => {
+      if (statusEl) statusEl.textContent = "Listening... speak now";
+    };
+
+    voiceRecognition.onresult = (event) => {
+      let interim = "";
+      let final = "";
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          final += event.results[i][0].transcript;
+        } else {
+          interim += event.results[i][0].transcript;
+        }
+      }
+      recordedGoal = (final || interim).trim();
+      if (recordedGoal) {
+        transcriptEl.textContent = `"${recordedGoal}"`;
+        transcriptEl.style.color = "#00e5ff";
+        runBtn.disabled = false;
+      }
+    };
+
+    voiceRecognition.onerror = (err) => {
+      if (statusEl) statusEl.textContent = "Speech recognition error or paused.";
+    };
+
+    voiceRecognition.onend = () => {
+      if (statusEl) {
+        statusEl.textContent = recordedGoal ? "Voice captured! Executing..." : "Listening stopped";
+      }
+      if (recordedGoal) {
+        setTimeout(() => {
+          if (voiceOverlayEl && recordedGoal) {
+            handleExecute();
+          }
+        }, 1200);
+      }
+    };
+
+    voiceRecognition.start();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "Could not initialize mic: " + err.message;
+  }
+}
+
+function closeVoiceCommandOverlay() {
+  if (voiceRecognition) {
+    try { voiceRecognition.stop(); } catch (e) {}
+    voiceRecognition = null;
+  }
+  if (voiceOverlayEl && voiceOverlayEl.parentNode) {
+    voiceOverlayEl.parentNode.removeChild(voiceOverlayEl);
+  }
+  voiceOverlayEl = null;
+}
+
+// Global hotkey: Alt + Shift + V triggers voice navigation overlay
+window.addEventListener("keydown", (e) => {
+  if (e.altKey && e.shiftKey && (e.code === "KeyV" || e.key === "V" || e.key === "v")) {
+    e.preventDefault();
+    toggleVoiceCommandOverlay();
+  } else if (e.key === "Escape" && voiceOverlayEl) {
+    closeVoiceCommandOverlay();
+  }
+});
+
+

@@ -279,7 +279,7 @@ class VisualBaselineManager:
         self,
         baseline_id: str,
         current_b64: str,
-        threshold: float = 0.05,
+        threshold: float = 0.01,
         url: Optional[str] = None,
     ) -> VisualDiffResult:
         """Compare a current screenshot against a registered baseline."""

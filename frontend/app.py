@@ -183,6 +183,40 @@ with tab_agent:
                 st.session_state["task_goal"] = "Click the Purge Database button."
                 st.rerun()
 
+        # Voice Command Dictation Section
+        with st.expander("🎙️ Speak Voice Command (Microphone & STT)", expanded=False):
+            v_col1, v_col2 = st.columns([3, 1])
+            with v_col1:
+                st.caption("Record voice command using your microphone to transcribe directly into natural language goal.")
+                audio_input_obj = st.audio_input("Record Voice Command", key="voice_audio_record")
+                if audio_input_obj is not None:
+                    raw_audio = audio_input_obj.read()
+                    if raw_audio and len(raw_audio) > 100:
+                        import hashlib
+                        audio_sig = hashlib.md5(raw_audio).hexdigest()
+                        if st.session_state.get("last_voice_audio_hash") != audio_sig:
+                            st.session_state["last_voice_audio_hash"] = audio_sig
+                            with st.spinner("Transcribing spoken audio with AI..."):
+                                trans_resp = backend_client.transcribe_voice_audio(raw_audio)
+                                if trans_resp.get("success") and trans_resp.get("transcript"):
+                                    spoken_text = trans_resp["transcript"]
+                                    st.session_state["task_goal"] = spoken_text
+                                    st.toast(f"🎙️ Spoken goal captured: '{spoken_text}'")
+                                    if st.session_state.get("auto_execute_voice", False):
+                                        st.session_state["pending_voice_run"] = True
+                                    st.rerun()
+                                else:
+                                    st.warning(f"Voice transcription note: {trans_resp.get('error', 'Unclear audio')}")
+            with v_col2:
+                st.checkbox("Auto-start after voice", value=False, key="auto_execute_voice")
+                st.caption("Quick Voice Goals:")
+                if st.button("🎙️ Play YouTube Song", key="vp_yt", use_container_width=True):
+                    st.session_state["task_goal"] = "Search YouTube for casetoo and play first video"
+                    st.rerun()
+                if st.button("🎙️ Extract Invoices", key="vp_inv", use_container_width=True):
+                    st.session_state["task_goal"] = "Navigate to billing page and extract invoice table details"
+                    st.rerun()
+
         task_input = st.text_area(
             "Natural Language Goal",
             value=st.session_state.get("task_goal", ""),
@@ -192,6 +226,21 @@ with tab_agent:
             help="Describe the end-to-end task for the browser agent.",
         )
         st.session_state["task_goal"] = task_input
+
+        # Handle pending voice run if auto-start was enabled
+        if st.session_state.get("pending_voice_run") and not st.session_state["is_running"] and task_input.strip():
+            st.session_state["pending_voice_run"] = False
+            s_url = (st.session_state.get("start_url") or "").strip() or None
+            res = backend_client.start_agent(
+                goal=task_input,
+                start_url=s_url,
+                max_steps=st.session_state.get("max_steps", 15),
+                model=st.session_state.get("model_name", "llama3.2:3b"),
+            )
+            if res.get("success"):
+                st.session_state["is_running"] = True
+                st.toast("⚡ Voice task auto-started successfully.")
+                st.rerun()
 
         # Action Buttons
         btn_col1, btn_col2, _ = st.columns([1.2, 1.2, 4])

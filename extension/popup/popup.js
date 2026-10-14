@@ -577,7 +577,15 @@ function setupVoiceNavigation() {
       isListening = false;
       voiceBtn.classList.remove("listening");
       if (voiceIcon) voiceIcon.textContent = "🎤";
-      quickInput.placeholder = "e.g. search for casetoo and play first video...";
+      if (quickInput.value.trim()) {
+        const runBtn = document.getElementById("btn-quick-run");
+        if (runBtn) {
+          runBtn.style.boxShadow = "0 0 16px #00e5ff";
+          setTimeout(() => { if (runBtn) runBtn.style.boxShadow = ""; }, 2500);
+        }
+      } else {
+        quickInput.placeholder = "e.g. search for casetoo and play first video...";
+      }
     };
 
     voiceBtn.addEventListener("click", () => {

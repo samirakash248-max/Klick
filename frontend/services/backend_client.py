@@ -775,5 +775,43 @@ class BackendClient:
         except Exception as exc:
             return {"error": str(exc)}
 
+    # =========================================================================
+    # VOICE COMMANDS & AUDIO SPEECH-TO-TEXT (STT)
+    # =========================================================================
+
+    def transcribe_voice_audio(self, audio_bytes: bytes, language: str = "en-US") -> Dict[str, Any]:
+        """Transcribe raw audio bytes into text via backend STT."""
+        import base64
+        try:
+            b64_str = base64.b64encode(audio_bytes).decode("utf-8")
+            with self._client() as client:
+                res = client.post("/api/voice/transcribe", json={"audio_base64": b64_str, "language": language})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def execute_voice_command(
+        self,
+        transcript: Optional[str] = None,
+        audio_bytes: Optional[bytes] = None,
+        start_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute task directly from spoken voice command."""
+        import base64
+        payload = {"transcript": transcript, "start_url": start_url}
+        if audio_bytes:
+            payload["audio_base64"] = base64.b64encode(audio_bytes).decode("utf-8")
+        try:
+            with self._client() as client:
+                res = client.post("/api/voice/command", json=payload)
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+
 
 

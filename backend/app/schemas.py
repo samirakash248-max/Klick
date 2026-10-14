@@ -840,5 +840,34 @@ class DocumentParseRequest(BaseModel):
     extract_tables: bool = Field(default=True, description="Attempt table structure parsing")
 
 
+# =========================================================================
+# VOICE COMMANDS & AUDIO SPEECH-TO-TEXT (STT)
+# =========================================================================
+
+class VoiceTranscribeRequest(BaseModel):
+    """Request to transcribe spoken audio into text command."""
+    audio_base64: Optional[str] = Field(default=None, description="Base64 encoded audio (WAV, MP3, WebM)")
+    language: Optional[str] = Field(default="en-US", description="Spoken language code (e.g. en-US, en-IN)")
+
+
+class VoiceTranscribeResponse(BaseModel):
+    """Result of speech recognition transcription."""
+    success: bool
+    transcript: str = ""
+    confidence: Optional[float] = 1.0
+    detected_language: str = "en-US"
+    error: Optional[str] = None
+
+
+class VoiceGoalCommandRequest(BaseModel):
+    """Request to directly execute a spoken voice command."""
+    audio_base64: Optional[str] = Field(default=None, description="Optional audio recording to transcribe")
+    transcript: Optional[str] = Field(default=None, description="Optional pre-transcribed text command")
+    start_url: Optional[str] = Field(default=None, description="Optional starting URL")
+    max_steps: Optional[int] = Field(default=15, description="Maximum steps")
+    model: Optional[str] = Field(default=None, description="Optional model override")
+
+
+
 
 

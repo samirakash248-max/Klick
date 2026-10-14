@@ -88,6 +88,9 @@ from .schemas import (
     TTSSettingsRequest,
     TTSRequest,
     VisualDiffRequest,
+    VoiceGoalCommandRequest,
+    VoiceTranscribeRequest,
+    VoiceTranscribeResponse,
 )
 from .macros import macro_manager
 
@@ -1252,6 +1255,50 @@ async def parse_last_downloaded_file():
         raise HTTPException(status_code=404, detail="No downloaded files found in downloads folder")
     res = document_extractor.extract_document(file_content=latest, filename=latest.name)
     return res.model_dump()
+
+
+# =====================================================================
+# VOICE COMMANDS & AUDIO TRANSCRIPTION (STT) ENDPOINTS
+# =====================================================================
+
+@app.post("/api/voice/transcribe", response_model=VoiceTranscribeResponse)
+async def transcribe_voice_audio(req: VoiceTranscribeRequest):
+    """Transcribe spoken voice audio into text command."""
+    from .voice_tts import voice_transcription_engine
+    if not req.audio_base64:
+        raise HTTPException(status_code=400, detail="Missing required field 'audio_base64'")
+    res = voice_transcription_engine.transcribe_audio(
+        audio_content=req.audio_base64,
+        language=req.language or "en-US",
+    )
+    return res
+
+
+@app.post("/api/voice/command")
+async def execute_voice_command(req: VoiceGoalCommandRequest):
+    """Transcribe voice audio if provided and start autonomous browser task."""
+    from .voice_tts import voice_transcription_engine
+    goal = req.transcript
+    if not goal and req.audio_base64:
+        trans_res = voice_transcription_engine.transcribe_audio(req.audio_base64)
+        if not trans_res.success:
+            raise HTTPException(status_code=400, detail=f"Voice transcription failed: {trans_res.error}")
+        goal = trans_res.transcript
+
+    if not goal or not goal.strip():
+        raise HTTPException(status_code=400, detail="No goal text or valid audio provided")
+
+    run_req = AgentRunRequest(
+        goal=goal.strip(),
+        start_url=req.start_url,
+        max_steps=req.max_steps or 15,
+        model=req.model,
+    )
+    start_res = await start_agent(run_req)
+    if isinstance(start_res, dict):
+        start_res["spoken_goal"] = goal
+        start_res["success"] = "error" not in start_res
+    return start_res
 
 
 # =====================================================================

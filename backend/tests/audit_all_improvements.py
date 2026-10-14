@@ -1,6 +1,6 @@
 """Full Live Audit & Verification Script for Klick Browser Agent.
 
-Audits and verifies all 17 improvements end-to-end:
+Audits and verifies all 18 improvements end-to-end:
 1. Visual Grounding & Dual Engine Execution
 2. Multi-Tab & Popup Management (new_tab, switch_tab, close_tab)
 3. Persistent Profiles & Session Restore (cookies.json, storage)
@@ -71,7 +71,7 @@ from backend.app.visual import (
     resolve_visual_target,
 )
 from backend.app.visual_diff import VisualBaselineManager, compute_visual_diff, visual_baseline_manager
-from backend.app.voice_tts import VoiceTTSEngine, voice_tts_engine
+from backend.app.voice_tts import VoiceTTSEngine, VoiceTranscriptionEngine, voice_transcription_engine, voice_tts_engine
 
 
 
@@ -573,17 +573,45 @@ INV-5002,Wayne Industries,$45000.50,2026-10-15,finance@wayne.com
         print("  [OK] CSV tables parsed, PDF extracted with pypdf, business entities (totals, invoices, emails) mapped")
         audit_results["17_document_pdf_extraction"] = "PASSED"
 
+        # -----------------------------------------------------------------
+        # AUDIT 18: VOICE COMMANDS & AUDIO SPEECH-TO-TEXT (STT) ENGINE
+        # -----------------------------------------------------------------
+        print("\n[AUDIT 18/18] Testing Voice Commands & Audio Speech-to-Text Pipeline...")
+        # 1. Reject invalid/corrupt audio buffer
+        invalid_res = voice_transcription_engine.transcribe_audio(b"")
+        assert invalid_res.success is False
+        assert "too small" in (invalid_res.error or "").lower()
+
+        # 2. Transcribe synthetic voice audio
+        test_spoken_goal = "play music on youtube and relax"
+        synth_wav = voice_tts_engine.generate_wav_bytes(test_spoken_goal)
+        assert synth_wav is not None and len(synth_wav) > 1000
+
+        stt_res = voice_transcription_engine.transcribe_audio(synth_wav)
+        assert stt_res.success is True
+        assert stt_res.transcript is not None
+        assert "youtube" in stt_res.transcript.lower() or "music" in stt_res.transcript.lower()
+
+        # 3. Base64 audio transcription
+        import base64
+        stt_b64_res = voice_transcription_engine.transcribe_audio(base64.b64encode(synth_wav).decode("utf-8"))
+        assert stt_b64_res.success is True
+
+        print(f"  [OK] Voice STT engine verified: buffer validation, synthetic WAV transcribe ('{stt_res.transcript}'), base64 audio payload")
+        audit_results["18_voice_command_stt"] = "PASSED"
+
+
     finally:
         await executor.close()
 
     print("\n" + "=" * 80)
-    print("AUDIT SUMMARY: ALL 17 IMPROVEMENTS VERIFIED")
+    print("AUDIT SUMMARY: ALL 18 IMPROVEMENTS VERIFIED")
     print("=" * 80)
     for k, status in sorted(audit_results.items()):
         print(f"  {k:35} : {status}")
 
     assert all(s == "PASSED" for s in audit_results.values()), "Some audit checks failed!"
-    print("\nALL 17 AUDIT CHECKS PASSED PERFECTLY!\n")
+    print("\nALL 18 AUDIT CHECKS PASSED PERFECTLY!\n")
 
 
 if __name__ == "__main__":
