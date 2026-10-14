@@ -80,6 +80,14 @@ from .schemas import (
     RunStatus,
     StepRecord,
     StopResponse,
+    BaselineSaveRequest,
+    DocumentParseRequest,
+    ScheduleCreateRequest,
+    ScheduleUpdateRequest,
+    ToastNotificationRequest,
+    TTSSettingsRequest,
+    TTSRequest,
+    VisualDiffRequest,
 )
 from .macros import macro_manager
 
@@ -125,13 +133,29 @@ _active_task: Optional[asyncio.Task] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager for startup and graceful shutdown."""
+    # Start automation scheduler worker
+    try:
+        from .scheduler import automation_scheduler
+        automation_scheduler.start()
+    except Exception as e:
+        logger.warning(f"Failed to start automation scheduler: {e}")
+
     yield
+
+    # Stop automation scheduler worker
+    try:
+        from .scheduler import automation_scheduler
+        automation_scheduler.stop()
+    except Exception:
+        pass
+
     # Cleanup browser resources on shutdown
     async with get_browser_lock():
         if executor:
             await executor.close()
         if observer:
             await observer.close()
+
 
 
 app = FastAPI(
@@ -998,8 +1022,242 @@ async def cancel_macro_recording():
 
 
 # =====================================================================
+# 5. SCHEDULED AUTOMATIONS & WINDOWS TOAST NOTIFICATIONS
+# =====================================================================
+
+@app.get("/api/scheduler/tasks")
+async def list_scheduled_tasks():
+    """List all configured recurring scheduled tasks."""
+    from .scheduler import automation_scheduler
+    return [t.model_dump() for t in automation_scheduler.list_tasks()]
+
+
+@app.get("/api/scheduler/tasks/{task_id}")
+async def get_scheduled_task(task_id: str):
+    """Retrieve details of a specific scheduled task."""
+    from .scheduler import automation_scheduler
+    task = automation_scheduler.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return task.model_dump()
+
+
+@app.post("/api/scheduler/tasks")
+async def create_scheduled_task(req: ScheduleCreateRequest):
+    """Create a new recurring scheduled task."""
+    from .scheduler import automation_scheduler
+    task = automation_scheduler.create_task(req)
+    return task.model_dump()
+
+
+@app.put("/api/scheduler/tasks/{task_id}")
+async def update_scheduled_task(task_id: str, req: ScheduleUpdateRequest):
+    """Update an existing scheduled task."""
+    from .scheduler import automation_scheduler
+    task = automation_scheduler.update_task(task_id, req)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return task.model_dump()
+
+
+@app.delete("/api/scheduler/tasks/{task_id}")
+async def delete_scheduled_task(task_id: str):
+    """Delete a scheduled task."""
+    from .scheduler import automation_scheduler
+    deleted = automation_scheduler.delete_task(task_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return {"success": True, "message": f"Task '{task_id}' deleted successfully"}
+
+
+@app.post("/api/scheduler/tasks/{task_id}/run")
+async def trigger_scheduled_task(task_id: str):
+    """Manually trigger immediate execution of a scheduled task."""
+    from .scheduler import automation_scheduler
+    res = await automation_scheduler.execute_task(task_id, executor=executor, agent_runner=agent_loop)
+    return res
+
+
+@app.post("/api/scheduler/toast/test")
+async def test_toast_notification(req: ToastNotificationRequest):
+    """Dispatch a test native Windows desktop toast alert."""
+    from .scheduler import send_windows_toast
+    success = send_windows_toast(title=req.title, message=req.message, duration_seconds=req.duration_seconds or 5)
+    return {"success": success, "title": req.title, "message": req.message}
+
+
+# =====================================================================
+# 6. VISUAL DIFF & WEBPAGE CHANGE MONITORING
+# =====================================================================
+
+@app.post("/api/visual-diff/compare")
+async def compare_visual_diff(req: VisualDiffRequest):
+    """Compute perceptual and pixel-wise difference between two base64 screenshots."""
+    from .visual_diff import compute_visual_diff
+    res = compute_visual_diff(
+        baseline_b64=req.baseline_image_base64,
+        current_b64=req.current_image_base64,
+        threshold=req.threshold or 0.02,
+    )
+    return res.model_dump()
+
+
+@app.get("/api/visual-diff/baselines")
+async def list_visual_baselines():
+    """List all registered visual baseline snapshots."""
+    from .visual_diff import visual_baseline_manager
+    return visual_baseline_manager.list_baselines()
+
+
+@app.post("/api/visual-diff/baselines")
+async def save_visual_baseline(req: BaselineSaveRequest):
+    """Save an image or active page capture as a visual baseline."""
+    from .visual_diff import visual_baseline_manager
+    image_b64 = req.image_base64
+    url = req.url
+    if not image_b64:
+        page = executor.current_page
+        if not page or page.is_closed():
+            raise HTTPException(status_code=400, detail="No active browser page open and no image_base64 provided")
+        import base64
+        shot_bytes = await page.screenshot(type="jpeg", quality=85)
+        image_b64 = base64.b64encode(shot_bytes).decode("utf-8")
+        url = url or page.url
+
+    entry = visual_baseline_manager.save_baseline(
+        baseline_id=req.baseline_id,
+        image_b64=image_b64,
+        label=req.label,
+        url=url,
+    )
+    return entry
+
+
+@app.delete("/api/visual-diff/baselines/{baseline_id}")
+async def delete_visual_baseline(baseline_id: str):
+    """Delete a registered visual baseline."""
+    from .visual_diff import visual_baseline_manager
+    deleted = visual_baseline_manager.delete_baseline(baseline_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Baseline '{baseline_id}' not found")
+    return {"success": True, "message": f"Baseline '{baseline_id}' deleted successfully"}
+
+
+@app.post("/api/visual-diff/check")
+async def check_active_page_visual_diff(payload: Dict[str, Any] = Body(...)):
+    """Compare the active browser page against a saved baseline."""
+    from .visual_diff import visual_baseline_manager
+    baseline_id = payload.get("baseline_id")
+    if not baseline_id:
+        raise HTTPException(status_code=400, detail="Missing required field 'baseline_id'")
+    threshold = float(payload.get("threshold", 0.05))
+
+    page = executor.current_page
+    if not page or page.is_closed():
+        raise HTTPException(status_code=400, detail="No active browser page open for comparison")
+
+    import base64
+    shot_bytes = await page.screenshot(type="jpeg", quality=85)
+    current_b64 = base64.b64encode(shot_bytes).decode("utf-8")
+
+    res = visual_baseline_manager.compare(
+        baseline_id=baseline_id,
+        current_b64=current_b64,
+        threshold=threshold,
+        url=page.url or "",
+    )
+    return res.model_dump()
+
+
+# =====================================================================
+# 7. BIDIRECTIONAL VOICE (AGENT SPEAKS BACK WITH TTS)
+# =====================================================================
+
+@app.get("/api/tts/status")
+async def get_tts_status():
+    """Retrieve voice speech synthesizer status, voices, rate, and volume."""
+    from .voice_tts import voice_tts_engine
+    return voice_tts_engine.get_status().model_dump()
+
+
+@app.post("/api/tts/speak")
+async def trigger_tts_speak(req: TTSRequest):
+    """Speak message aloud through desktop audio speakers."""
+    from .voice_tts import voice_tts_engine
+    spoken = voice_tts_engine.speak(
+        text=req.text,
+        wait=req.wait,
+        voice_id=req.voice_id,
+        rate=req.rate,
+        volume=req.volume,
+    )
+    return {"spoken": spoken, "text": req.text}
+
+
+@app.post("/api/tts/synthesize")
+async def synthesize_tts_audio(req: TTSRequest):
+    """Synthesize text into WAV audio bytes and return base64 payload."""
+    from .voice_tts import voice_tts_engine
+    audio_b64 = voice_tts_engine.generate_wav_base64(
+        text=req.text,
+        voice_id=req.voice_id,
+        rate=req.rate,
+        volume=req.volume,
+    )
+    if not audio_b64:
+        raise HTTPException(status_code=500, detail="Failed to synthesize audio WAV payload")
+    return {"audio_base64": audio_b64, "format": "wav", "text": req.text}
+
+
+@app.post("/api/tts/settings")
+async def update_tts_settings(req: TTSSettingsRequest):
+    """Update voice speech synthesizer parameters."""
+    from .voice_tts import voice_tts_engine
+    voice_tts_engine.update_settings(req)
+    return voice_tts_engine.get_status().model_dump()
+
+
+# =====================================================================
+# 8. AUTOMATED PDF & DOCUMENT EXTRACTION ENGINE
+# =====================================================================
+
+@app.get("/api/documents/downloads")
+async def list_downloaded_documents():
+    """List all documents and files captured by the download interceptor."""
+    from .document_extractor import document_extractor
+    return document_extractor.list_downloads()
+
+
+@app.post("/api/documents/extract")
+async def extract_document_endpoint(req: DocumentParseRequest):
+    """Extract tables, plain text, and business entities from PDF or file."""
+    from .document_extractor import document_extractor
+    target = req.file_path or req.file_base64
+    if not target:
+        raise HTTPException(status_code=400, detail="Must provide either 'file_path' or 'file_base64'")
+    res = document_extractor.extract_document(
+        file_content=target,
+        filename=req.filename or "document.pdf",
+        extract_tables=req.extract_tables,
+    )
+    return res.model_dump()
+
+
+@app.post("/api/documents/parse-last-download")
+async def parse_last_downloaded_file():
+    """Parse the most recent download from active browser navigation."""
+    from .document_extractor import document_extractor
+    latest = document_extractor.get_latest_download()
+    if not latest:
+        raise HTTPException(status_code=404, detail="No downloaded files found in downloads folder")
+    res = document_extractor.extract_document(file_content=latest, filename=latest.name)
+    return res.model_dump()
+
+
+# =====================================================================
 # EXTENSION IN-TAB EXECUTION ENDPOINTS (NO EXTRA CHROMIUM WINDOW)
 # =====================================================================
+
 
 
 @app.post("/api/extension/start")

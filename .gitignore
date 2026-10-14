@@ -71,5 +71,10 @@ data/browser_profile/
 data/macros/
 data/exports/
 data/personas/
+data/schedules.json
+data/visual_baselines/
+data/downloads/
+data/extracted_documents/
+
 
 

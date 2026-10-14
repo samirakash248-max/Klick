@@ -426,6 +426,13 @@ class AgentLoop:
                 {"status": state.status, "steps": state.current_step},
                 run_id=run_id,
             )
+            try:
+                from .voice_tts import voice_tts_engine
+                if state.status == RunStatus.COMPLETED and voice_tts_engine.enabled:
+                    voice_tts_engine.speak(f"Task completed: {state.final_output or 'Goal achieved'}")
+            except Exception:
+                pass
+
             # Browser cleanup is deferred or handled explicitly
 
         return state

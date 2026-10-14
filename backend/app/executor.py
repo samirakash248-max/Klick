@@ -321,12 +321,33 @@ class PlaywrightExecutor:
             self._attach_page_listeners(p)
 
     def _attach_page_listeners(self, page: Page) -> None:
-        """Attach listeners to a specific page for popups and closure."""
+        """Attach listeners to a specific page for popups, closure, and downloads."""
         try:
             page.on("close", lambda p: self._on_page_closed(p))
             page.on("popup", lambda p: self._on_page_created(p))
+            page.on("download", lambda d: self._handle_download(d))
         except Exception:
             pass
+
+    def _handle_download(self, download) -> None:
+        """Asynchronously intercept and parse downloaded files."""
+        async def _save_and_parse():
+            try:
+                from .document_extractor import DOWNLOADS_DIR, document_extractor
+                filename = download.suggested_filename
+                target_path = DOWNLOADS_DIR / filename
+                await download.save_as(str(target_path))
+                logger.info(f"[Download Interceptor] Intercepted download: {target_path}")
+                document_extractor.extract_document(target_path, filename=filename)
+            except Exception as e:
+                logger.warning(f"[Download Interceptor] Failed handling download: {e}")
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_save_and_parse())
+        except Exception:
+            pass
+
 
     def _on_page_created(self, page: Page) -> None:
         """Handle new tab or popup window creation."""
@@ -2207,8 +2228,42 @@ class PlaywrightExecutor:
             "error": "Chrome is not running with --remote-debugging-port=9222",
         }
 
+    async def capture_page_baseline(self, baseline_id: str, label: Optional[str] = None) -> Dict[str, Any]:
+        """Capture active page screenshot and save as a named visual baseline."""
+        from .visual_diff import visual_baseline_manager
+        page = self.current_page
+        if not page or page.is_closed():
+            raise RuntimeError("No active page open to capture baseline")
+        import base64
+        shot_bytes = await page.screenshot(type="jpeg", quality=85)
+        shot_b64 = base64.b64encode(shot_bytes).decode("utf-8")
+        url = page.url or ""
+        return visual_baseline_manager.save_baseline(
+            baseline_id=baseline_id,
+            image_b64=shot_b64,
+            label=label or page.url,
+            url=url,
+        )
+
+    async def compare_page_visual_diff(self, baseline_id: str, threshold: float = 0.05):
+        """Capture active page and compare against registered visual baseline."""
+        from .visual_diff import visual_baseline_manager
+        page = self.current_page
+        if not page or page.is_closed():
+            raise RuntimeError("No active page open for visual comparison")
+        import base64
+        shot_bytes = await page.screenshot(type="jpeg", quality=85)
+        shot_b64 = base64.b64encode(shot_bytes).decode("utf-8")
+        return visual_baseline_manager.compare(
+            baseline_id=baseline_id,
+            current_b64=shot_b64,
+            threshold=threshold,
+            url=page.url or "",
+        )
+
     async def close(self) -> None:
         """Tear down browser session, save cookies, and release resources cleanly."""
+
         try:
             await self.save_cookies()
         except Exception:

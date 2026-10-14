@@ -138,13 +138,18 @@ render_sidebar(backend_client, ollama_service)
 
 
 # 5. Top Navigation & Tabs
-tab_agent, tab_personas, tab_playground, tab_exports, tab_events = st.tabs([
+tab_agent, tab_personas, tab_scheduler, tab_visual, tab_voice, tab_docs, tab_playground, tab_exports, tab_events = st.tabs([
     "Agent Control",
     "Persona Vault & Autofill",
+    "⏰ Scheduler & Alerts",
+    "🔍 Visual Diff Monitor",
+    "🗣️ Voice (TTS)",
+    "📄 Document & PDF Extractor",
     "Model Playground",
     "Data Exports",
     "Event Telemetry",
 ])
+
 
 
 
@@ -404,6 +409,303 @@ with tab_personas:
                         st.rerun()
                     else:
                         st.error(f"Error saving persona: {save_res.get('error')}")
+
+
+# =====================================================================
+# TAB: ⏰ RECURRING AUTOMATIONS & WINDOWS TOAST ALERTS
+# =====================================================================
+with tab_scheduler:
+    st.subheader("⏰ Recurring Background Automations & Desktop Toast Alerts")
+    st.caption("Autonomous scheduled monitoring with native Windows desktop alerts upon completion or price changes.")
+
+    col_toast_test1, col_toast_test2 = st.columns([3, 1])
+    with col_toast_test1:
+        toast_sample_text = st.text_input("Desktop Toast Alert Test Message", value="Klick: Price drop detected on monitor ($299.99)!")
+    with col_toast_test2:
+        st.write("")
+        st.write("")
+        if st.button("🔔 Send Test Toast", type="primary", use_container_width=True):
+            with st.spinner("Dispatching toast..."):
+                t_res = backend_client.test_windows_toast(
+                    title="Klick Browser Agent",
+                    message=toast_sample_text,
+                )
+                if t_res.get("success"):
+                    st.success("Native Windows desktop notification dispatched!")
+                else:
+                    st.warning(f"Toast response: {t_res.get('message', 'Dispatched')}")
+
+    st.markdown("---")
+    st.markdown("### Configured Automation Schedules")
+    schedules = backend_client.list_schedules()
+
+    if schedules:
+        for sch in schedules:
+            sid = sch.get("id")
+            sname = sch.get("name")
+            stype = sch.get("schedule_type", "interval").upper()
+            interval = sch.get("interval_seconds", 3600)
+            status = sch.get("last_status", "idle")
+            last_run = sch.get("last_run", "Never")
+            next_run = sch.get("next_run", "-")
+            status_color = "🟢" if status == "success" else ("🔴" if status == "failed" else "⚪")
+
+            with st.expander(f"{status_color} **{sname}** ({stype} every {interval}s) - Status: {status.upper()}", expanded=True):
+                col_s1, col_s2, col_s3 = st.columns([2, 2, 2])
+                with col_s1:
+                    st.markdown(f"**Task Type:** `{sch.get('task_type')}`")
+                    st.markdown(f"**Interval:** `{interval} seconds`")
+                    st.markdown(f"**Desktop Toast:** `{'Enabled' if sch.get('notify_on_complete') else 'Disabled'}`")
+                with col_s2:
+                    st.markdown(f"**Last Run:** `{last_run}`")
+                    st.markdown(f"**Next Run:** `{next_run}`")
+                    st.markdown(f"**Times Run:** `{sch.get('run_count', 0)}`")
+                with col_s3:
+                    if st.button(f"▶ Run Now", key=f"run_sch_{sid}", use_container_width=True):
+                        with st.spinner(f"Running '{sname}'..."):
+                            run_res = backend_client.run_schedule_now(sid)
+                            if run_res.get("success"):
+                                st.success(f"Executed: {run_res.get('message')}")
+                                st.rerun()
+                            else:
+                                st.error(f"Failed: {run_res.get('error') or run_res.get('message')}")
+                    if st.button(f"🗑 Delete", key=f"del_sch_{sid}", use_container_width=True):
+                        backend_client.delete_schedule(sid)
+                        st.rerun()
+
+                if sch.get("last_message"):
+                    st.info(f"**Last Outcome:** {sch.get('last_message')}")
+    else:
+        st.info("No recurring schedules configured yet.")
+
+    with st.expander("➕ Create New Automation Schedule", expanded=False):
+        col_ns1, col_ns2 = st.columns(2)
+        with col_ns1:
+            new_sch_name = st.text_input("Schedule Name", value="Periodic Price & Task Check")
+            new_sch_type = st.selectbox("Task Action Type", options=["macro", "goal", "url_check"])
+            new_sch_interval = st.number_input("Interval (seconds)", min_value=10, value=300, step=30)
+        with col_ns2:
+            new_sch_target = st.text_input("Target Goal / URL / Macro ID", value="Check http://localhost:8080/index.html")
+            new_sch_notify = st.checkbox("Send Windows Toast Alert on Complete", value=True)
+            new_sch_on_change = st.checkbox("Notify Only on Change", value=False)
+
+        if st.button("Save & Register Schedule", type="primary"):
+            payload = {
+                "name": new_sch_name,
+                "schedule_type": "interval",
+                "interval_seconds": int(new_sch_interval),
+                "task_type": new_sch_type,
+                "payload": {"goal": new_sch_target, "url": new_sch_target},
+                "notify_on_complete": new_sch_notify,
+                "notify_on_change_only": new_sch_on_change,
+            }
+            res = backend_client.create_schedule(payload)
+            if "id" in res:
+                st.success(f"Created schedule '{new_sch_name}'!")
+                st.rerun()
+            else:
+                st.error(f"Error: {res.get('error')}")
+
+
+# =====================================================================
+# TAB: 🔍 VISUAL DIFF & WEBPAGE CHANGE MONITORING
+# =====================================================================
+with tab_visual:
+    st.subheader("🔍 Visual Diff & Webpage Change Monitoring")
+    st.caption("Perceptual and pixel-level comparison engine. Detects price shifts, altered UI components, and layout changes.")
+
+    baselines = backend_client.list_visual_baselines()
+
+    col_vb1, col_vb2 = st.columns([2, 1])
+    with col_vb1:
+        new_base_id = st.text_input("Baseline ID", value="homepage_baseline")
+        new_base_label = st.text_input("Label / Description", value="Mock Site Homepage Baseline")
+    with col_vb2:
+        st.write("")
+        st.write("")
+        if st.button("📸 Capture Active Page as Baseline", type="primary", use_container_width=True):
+            with st.spinner("Capturing baseline..."):
+                c_res = backend_client.save_visual_baseline(new_base_id, label=new_base_label)
+                if "id" in c_res:
+                    st.success(f"Saved baseline '{new_base_id}'!")
+                    st.rerun()
+                else:
+                    st.error(f"Failed to capture: {c_res.get('error')}")
+
+    st.markdown("---")
+    st.markdown("### Compare Active Browser Page with Baseline")
+
+    if baselines:
+        selected_base = st.selectbox(
+            "Select Baseline to Compare",
+            options=[b["id"] for b in baselines],
+            format_func=lambda bid: f"{bid} ({next((b.get('label') for b in baselines if b['id'] == bid), '')})",
+        )
+        diff_threshold = st.slider("Change Sensitivity Threshold (%)", min_value=0.5, max_value=20.0, value=2.0, step=0.5)
+
+        if st.button("🔍 Run Visual Diff Analysis", type="primary"):
+            with st.spinner("Comparing current page against baseline..."):
+                diff_res = backend_client.check_visual_diff(selected_base, threshold=diff_threshold / 100.0)
+                if "similarity_score" in diff_res:
+                    st.session_state["last_diff_res"] = diff_res
+                else:
+                    st.error(f"Diff error: {diff_res.get('error')}")
+
+        if "last_diff_res" in st.session_state:
+            d_res = st.session_state["last_diff_res"]
+            sim = d_res.get("similarity_score", 1.0)
+            chg = d_res.get("change_percentage", 0.0)
+            has_chg = d_res.get("has_changed", False)
+            regions = d_res.get("changed_regions_count", 0)
+
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1:
+                st.metric("Similarity Score", f"{sim * 100.0:.1f}%")
+            with col_m2:
+                st.metric("Change Magnitude", f"{chg:.2f}%", delta=f"{'+' if has_chg else ''}{chg:.2f}%")
+            with col_m3:
+                st.metric("Changed Regions", str(regions))
+            with col_m4:
+                st.metric("Verdict", "ALTERED" if has_chg else "UNCHANGED")
+
+            diff_img_b64 = d_res.get("diff_image_base64")
+            if diff_img_b64:
+                st.markdown("#### Visual Difference Overlay (Red: Altered Pixels, Green: Bounding Regions)")
+                st.image(f"data:image/jpeg;base64,{diff_img_b64}", use_container_width=True)
+    else:
+        st.info("No visual baselines captured yet. Click 'Capture Active Page as Baseline' above to establish your reference snapshot.")
+
+
+# =====================================================================
+# TAB: 🗣️ BIDIRECTIONAL VOICE & TEXT-TO-SPEECH (TTS)
+# =====================================================================
+with tab_voice:
+    st.subheader("🗣️ Bidirectional Voice & Speech Synthesis (TTS)")
+    st.caption("Agent speaks back status updates aloud using offline Windows SAPI5 / pyttsx3 or browser Web Speech.")
+
+    tts_stat = backend_client.get_tts_status()
+    voices = tts_stat.get("available_voices", [])
+
+    col_v1, col_v2 = st.columns(2)
+    with col_v1:
+        st.markdown(f"**Speech Engine:** `{tts_stat.get('engine', 'sapi5_windows')}`")
+        st.markdown(f"**Synthesizer Status:** `{'Enabled' if tts_stat.get('enabled') else 'Disabled'}`")
+    with col_v2:
+        voice_opts = [v["id"] for v in voices] if voices else ["default"]
+        selected_v = st.selectbox(
+            "Selected Voice",
+            options=voice_opts,
+            format_func=lambda vid: next((v.get("name", vid) for v in voices if v["id"] == vid), vid),
+        )
+
+    st.markdown("---")
+    st.markdown("### Interactive Voice Test")
+    sample_tts_text = st.text_area(
+        "Text to Speak Aloud",
+        value="Task completed successfully: Scraped 15 tasks to CSV and found invoice INV-1001.",
+        height=75,
+    )
+
+    col_spk1, col_spk2 = st.columns(2)
+    with col_spk1:
+        if st.button("📢 Speak Aloud (Desktop Speakers)", type="primary", use_container_width=True):
+            with st.spinner("Speaking..."):
+                s_res = backend_client.speak_tts(sample_tts_text, voice_id=selected_v)
+                st.success("Dispatched to Windows speech audio device!")
+    with col_spk2:
+        if st.button("🎵 Synthesize & Play in Browser", use_container_width=True):
+            with st.spinner("Synthesizing WAV audio..."):
+                wav_b64 = backend_client.synthesize_tts_wav(sample_tts_text, voice_id=selected_v)
+                if wav_b64:
+                    st.audio(f"data:audio/wav;base64,{wav_b64}", format="audio/wav")
+                else:
+                    st.error("Failed to generate WAV audio.")
+
+
+# =====================================================================
+# TAB: 📄 AUTOMATED PDF & DOCUMENT EXTRACTION ENGINE
+# =====================================================================
+with tab_docs:
+    st.subheader("📄 Automated PDF & Document Extraction Engine")
+    st.caption("Auto-detects and extracts tabular data, totals, invoice IDs, dates, and contacts from downloaded or uploaded documents.")
+
+    col_doc1, col_doc2 = st.columns([2, 1])
+    with col_doc1:
+        uploaded_doc = st.file_uploader("Upload PDF, CSV, or Invoice Document to Parse", type=["pdf", "csv", "tsv", "json", "txt"])
+    with col_doc2:
+        st.write("")
+        st.write("")
+        if st.button("⚡ Parse Last Browser Download", type="primary", use_container_width=True):
+            with st.spinner("Extracting from latest download..."):
+                p_res = backend_client.parse_latest_download()
+                if "filename" in p_res:
+                    st.session_state["last_doc_res"] = p_res
+                    st.success(f"Parsed latest download '{p_res.get('filename')}'!")
+                else:
+                    st.info(p_res.get("error", "No downloads found."))
+
+    if uploaded_doc is not None:
+        if st.button("📑 Extract Uploaded Document", type="primary"):
+            with st.spinner(f"Extracting {uploaded_doc.name}..."):
+                import base64
+                doc_bytes = uploaded_doc.read()
+                doc_b64 = base64.b64encode(doc_bytes).decode("utf-8")
+                e_res = backend_client.extract_document(file_base64=doc_b64, filename=uploaded_doc.name)
+                if "filename" in e_res:
+                    st.session_state["last_doc_res"] = e_res
+                    st.success(f"Successfully extracted {uploaded_doc.name}!")
+                else:
+                    st.error(f"Extraction failed: {e_res.get('error')}")
+
+    if "last_doc_res" in st.session_state:
+        doc = st.session_state["last_doc_res"]
+        st.markdown("---")
+        st.markdown(f"### Extraction Results: `{doc.get('filename')}`")
+
+        c_meta1, c_meta2, c_meta3 = st.columns(3)
+        with c_meta1:
+            st.metric("Format", doc.get("file_type", "").upper())
+        with c_meta2:
+            st.metric("Pages", str(doc.get("page_count", 1)))
+        with c_meta3:
+            st.metric("Total Characters", f"{doc.get('total_characters', 0):,}")
+
+        # Entities Card
+        entities = doc.get("entities", {})
+        if entities:
+            st.markdown("#### Detected Business Entities")
+            col_ent1, col_ent2, col_ent3 = st.columns(3)
+            with col_ent1:
+                totals = entities.get("currency_amounts", [])
+                st.markdown(f"**Amounts / Totals:** {', '.join(totals) if totals else 'None'}")
+            with col_ent2:
+                invs = entities.get("invoice_numbers", [])
+                st.markdown(f"**Invoice / Order IDs:** {', '.join(invs) if invs else 'None'}")
+            with col_ent3:
+                dates = entities.get("dates", [])
+                st.markdown(f"**Dates:** {', '.join(dates) if dates else 'None'}")
+
+        # Tables
+        tables = doc.get("tables", [])
+        if tables:
+            st.markdown(f"#### Extracted Tables ({len(tables)})")
+            for i, tbl in enumerate(tables):
+                headers = tbl.get("headers", [])
+                rows = tbl.get("rows", [])
+                if rows:
+                    import pandas as pd
+                    df = pd.DataFrame(rows, columns=headers if headers and len(headers) == len(rows[0]) else None)
+                    st.dataframe(df, use_container_width=True)
+        else:
+            with st.expander("Plain Text Preview", expanded=False):
+                st.text(doc.get("text_content", "")[:1500])
+
+    # Downloads directory inventory
+    downloads_list = backend_client.list_downloaded_documents()
+    if downloads_list:
+        with st.expander(f"📁 Captured Browser Downloads ({len(downloads_list)} files)", expanded=False):
+            for d in downloads_list:
+                st.markdown(f"- **{d['filename']}** ({d['size_bytes'] / 1024:.1f} KB) - `{d['modified'][:19].replace('T', ' ')}`")
 
 
 # =====================================================================

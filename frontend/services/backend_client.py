@@ -591,4 +591,189 @@ class BackendClient:
         except Exception:
             return {"status": "error"}
 
+    # =========================================================================
+    # 5. SCHEDULED AUTOMATIONS & WINDOWS TOAST NOTIFICATIONS
+    # =========================================================================
+
+    def list_schedules(self) -> List[Dict[str, Any]]:
+        """List all recurring automation schedules."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/scheduler/tasks")
+                if res.status_code == 200:
+                    return res.json()
+                return []
+        except Exception:
+            return []
+
+    def create_schedule(self, schedule_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Register a new recurring schedule."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/scheduler/tasks", json=schedule_data)
+                if res.status_code == 200:
+                    return res.json()
+                return {"error": res.text}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def delete_schedule(self, task_id: str) -> bool:
+        """Delete a scheduled task."""
+        try:
+            with self._client() as client:
+                res = client.delete(f"/api/scheduler/tasks/{task_id}")
+                return res.status_code == 200
+        except Exception:
+            return False
+
+    def run_schedule_now(self, task_id: str) -> Dict[str, Any]:
+        """Trigger immediate execution of a scheduled task."""
+        try:
+            with self._client() as client:
+                res = client.post(f"/api/scheduler/tasks/{task_id}/run")
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def test_windows_toast(self, title: str, message: str) -> Dict[str, Any]:
+        """Dispatch a test native Windows desktop toast alert."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/scheduler/toast/test", json={"title": title, "message": message})
+                if res.status_code == 200:
+                    return res.json()
+                return {"success": False, "error": res.text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    # =========================================================================
+    # 6. VISUAL DIFF & WEBPAGE CHANGE MONITORING
+    # =========================================================================
+
+    def list_visual_baselines(self) -> List[Dict[str, Any]]:
+        """List stored visual baseline snapshots."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/visual-diff/baselines")
+                if res.status_code == 200:
+                    return res.json()
+                return []
+        except Exception:
+            return []
+
+    def save_visual_baseline(self, baseline_id: str, label: Optional[str] = None) -> Dict[str, Any]:
+        """Save active browser page as a visual baseline."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/visual-diff/baselines", json={"baseline_id": baseline_id, "label": label})
+                if res.status_code == 200:
+                    return res.json()
+                return {"error": res.text}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def check_visual_diff(self, baseline_id: str, threshold: float = 0.05) -> Dict[str, Any]:
+        """Compare active page with baseline screenshot."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/visual-diff/check", json={"baseline_id": baseline_id, "threshold": threshold})
+                if res.status_code == 200:
+                    return res.json()
+                return {"error": res.text}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def compare_images(self, baseline_b64: str, current_b64: str, threshold: float = 0.02) -> Dict[str, Any]:
+        """Compare any two base64 screenshots."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/visual-diff/compare", json={
+                    "baseline_image_base64": baseline_b64,
+                    "current_image_base64": current_b64,
+                    "threshold": threshold,
+                })
+                if res.status_code == 200:
+                    return res.json()
+                return {"error": res.text}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    # =========================================================================
+    # 7. BIDIRECTIONAL VOICE (AGENT SPEAKS BACK WITH TTS)
+    # =========================================================================
+
+    def get_tts_status(self) -> Dict[str, Any]:
+        """Get voice synthesis status and voices."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/tts/status")
+                if res.status_code == 200:
+                    return res.json()
+                return {"enabled": False}
+        except Exception:
+            return {"enabled": False}
+
+    def speak_tts(self, text: str, voice_id: Optional[str] = None, wait: bool = False) -> Dict[str, Any]:
+        """Trigger text-to-speech aloud."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/tts/speak", json={"text": text, "voice_id": voice_id, "wait": wait})
+                if res.status_code == 200:
+                    return res.json()
+                return {"spoken": False, "error": res.text}
+        except Exception as exc:
+            return {"spoken": False, "error": str(exc)}
+
+    def synthesize_tts_wav(self, text: str, voice_id: Optional[str] = None) -> Optional[str]:
+        """Synthesize text and return base64 WAV audio string."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/tts/synthesize", json={"text": text, "voice_id": voice_id})
+                if res.status_code == 200:
+                    return res.json().get("audio_base64")
+                return None
+        except Exception:
+            return None
+
+    # =========================================================================
+    # 8. AUTOMATED PDF & DOCUMENT EXTRACTION ENGINE
+    # =========================================================================
+
+    def list_downloaded_documents(self) -> List[Dict[str, Any]]:
+        """List files captured by the browser download interceptor."""
+        try:
+            with self._client() as client:
+                res = client.get("/api/documents/downloads")
+                if res.status_code == 200:
+                    return res.json()
+                return []
+        except Exception:
+            return []
+
+    def extract_document(self, file_path: Optional[str] = None, file_base64: Optional[str] = None, filename: str = "document.pdf") -> Dict[str, Any]:
+        """Parse PDF or document into structured data."""
+        try:
+            with self._client() as client:
+                payload = {"file_path": file_path, "file_base64": file_base64, "filename": filename}
+                res = client.post("/api/documents/extract", json=payload)
+                if res.status_code == 200:
+                    return res.json()
+                return {"error": res.text}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def parse_latest_download(self) -> Dict[str, Any]:
+        """Parse most recently downloaded file."""
+        try:
+            with self._client() as client:
+                res = client.post("/api/documents/parse-last-download")
+                if res.status_code == 200:
+                    return res.json()
+                return {"error": res.text}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+
 

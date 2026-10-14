@@ -1,6 +1,6 @@
 """Full Live Audit & Verification Script for Klick Browser Agent.
 
-Audits and verifies all 13 improvements end-to-end:
+Audits and verifies all 17 improvements end-to-end:
 1. Visual Grounding & Dual Engine Execution
 2. Multi-Tab & Popup Management (new_tab, switch_tab, close_tab)
 3. Persistent Profiles & Session Restore (cookies.json, storage)
@@ -14,10 +14,15 @@ Audits and verifies all 13 improvements end-to-end:
 11. Encrypted Persona Vault & Smart Form Auto-Filler
 12. Direct Chrome DevTools Protocol (CDP) Bridge (:9222)
 13. "Watch & Learn" Interactive RPA Macro Recorder
+14. Scheduled Automations & Native Windows Toast Notifications
+15. Visual Diff & Webpage Change Monitoring Engine
+16. Bidirectional Voice (Agent Speaks Back with TTS)
+17. Automated PDF & Document Extraction Engine
 """
 
 import asyncio
 import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -29,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from backend.app.document_extractor import DocumentExtractor, document_extractor
 from backend.app.executor import (
     EXPORTS_DIR,
     MOCK_SITE_DIR,
@@ -47,7 +53,16 @@ from backend.app.persona import (
 )
 from backend.app.recorder import MacroRecorder, macro_recorder
 from backend.app.safety import SafetyGuard
-from backend.app.schemas import ActionType, BrowserAction, ElementCoordinates, PageObservation, RunStatus
+from backend.app.scheduler import AutomationScheduler, automation_scheduler, send_windows_toast
+from backend.app.schemas import (
+    ActionType,
+    BrowserAction,
+    ElementCoordinates,
+    PageObservation,
+    RunStatus,
+    ScheduleCreateRequest,
+    ScheduleType,
+)
 from backend.app.visual import (
     SOM_CLEANUP_SCRIPT,
     SOM_INJECT_SCRIPT,
@@ -55,6 +70,9 @@ from backend.app.visual import (
     compute_visual_similarity,
     resolve_visual_target,
 )
+from backend.app.visual_diff import VisualBaselineManager, compute_visual_diff, visual_baseline_manager
+from backend.app.voice_tts import VoiceTTSEngine, voice_tts_engine
+
 
 
 async def run_full_audit():
@@ -395,18 +413,179 @@ async def run_full_audit():
         print(f"  [OK] Interactive Macro Recorder compiled {len(compiled.steps)} steps, typing consolidated, extension hooks verified")
         audit_results["13_watch_and_learn_recorder"] = "PASSED"
 
+        # -----------------------------------------------------------------
+        # AUDIT 14: SCHEDULED AUTOMATIONS & WINDOWS TOAST NOTIFICATIONS
+        # -----------------------------------------------------------------
+        print("\n[AUDIT 14/17] Testing Scheduled Automations & Windows Toast Alerts...")
+        # Verify default tasks loaded
+        tasks = automation_scheduler.list_tasks()
+        assert len(tasks) >= 1, "Scheduler tasks list empty"
+
+        # Register audit task
+        audit_task = automation_scheduler.create_task(ScheduleCreateRequest(
+            name="Audit Scheduled Monitor",
+            description="Recurring audit task",
+            schedule_type=ScheduleType.INTERVAL,
+            interval_seconds=60,
+            task_type="url_check",
+            payload={"url": tasks_html},
+            notify_on_complete=False,
+        ))
+        assert audit_task.id.startswith("task-")
+
+        # Execute scheduled task directly
+        exec_res = await automation_scheduler.execute_task(audit_task.id, executor=executor)
+        assert exec_res["success"] is True, f"Scheduled task execution failed: {exec_res}"
+        assert exec_res["status"] == "success"
+
+        # Test desktop toast dispatch
+        toast_dispatched = send_windows_toast(
+            title="Klick Audit Verification",
+            message="Improvement 14 desktop alert verification confirmed",
+            duration_seconds=2,
+        )
+        assert toast_dispatched is True
+
+        # Clean up audit schedule
+        automation_scheduler.delete_task(audit_task.id)
+        print("  [OK] Recurring schedule registered, executed, status recorded, native desktop toast dispatched")
+        audit_results["14_scheduled_automations_toast"] = "PASSED"
+
+        # -----------------------------------------------------------------
+        # AUDIT 15: VISUAL DIFF & WEBPAGE CHANGE MONITORING
+        # -----------------------------------------------------------------
+        print("\n[AUDIT 15/17] Testing Visual Diff & Webpage Change Monitoring...")
+        await executor.navigate(billing_html)
+        obs_baseline = await observer.observe(page)
+        assert obs_baseline.screenshot_base64 is not None
+
+        # 1. Compare identical screenshot against itself
+        diff_identical = compute_visual_diff(
+            baseline_b64=obs_baseline.screenshot_base64,
+            current_b64=obs_baseline.screenshot_base64,
+            threshold=0.02,
+        )
+        assert diff_identical.similarity_score == 1.0, f"Expected 1.0 similarity, got {diff_identical.similarity_score}"
+        assert diff_identical.change_percentage == 0.0
+        assert diff_identical.has_changed is False
+
+        # 2. Modify DOM dynamically to create an altered page
+        await page.evaluate("""() => {
+            const h = document.querySelector('h1, h2, .header, #brand');
+            if (h) {
+                h.style.backgroundColor = 'red';
+                h.style.color = 'yellow';
+                h.innerText = 'ALTERED BANNER FOR VISUAL DIFF AUDIT';
+            }
+        }""")
+        obs_altered = await observer.observe(page)
+        assert obs_altered.screenshot_base64 is not None
+
+        diff_altered = compute_visual_diff(
+            baseline_b64=obs_baseline.screenshot_base64,
+            current_b64=obs_altered.screenshot_base64,
+            threshold=0.02,
+        )
+        assert diff_altered.has_changed is True, "Visual diff failed to detect altered banner"
+        assert diff_altered.change_percentage > 0.0
+        assert diff_altered.diff_image_base64 is not None
+        assert diff_altered.changed_regions_count >= 1
+
+        # Test saving and retrieving from visual baseline manager
+        entry = visual_baseline_manager.save_baseline("audit_test_baseline", obs_baseline.screenshot_base64, label="Audit Baseline")
+        assert entry["id"] == "audit_test_baseline"
+        manager_diff = visual_baseline_manager.compare("audit_test_baseline", obs_altered.screenshot_base64)
+        assert manager_diff.has_changed is True
+        visual_baseline_manager.delete_baseline("audit_test_baseline")
+
+        print(f"  [OK] Visual diff detected DOM change ({diff_altered.change_percentage}% altered), generated composite overlay and bounding boxes")
+        audit_results["15_visual_diff_monitoring"] = "PASSED"
+
+        # -----------------------------------------------------------------
+        # AUDIT 16: BIDIRECTIONAL VOICE (AGENT SPEAKS BACK WITH TTS)
+        # -----------------------------------------------------------------
+        print("\n[AUDIT 16/17] Testing Bidirectional Voice & Speech Synthesis (TTS)...")
+        tts_status = voice_tts_engine.get_status()
+        assert tts_status.enabled is True
+        assert tts_status.engine == "sapi5_windows"
+        assert len(tts_status.available_voices) >= 1, "No TTS voices detected"
+
+        # Generate WAV bytes and verify RIFF WAV format header
+        wav_bytes = voice_tts_engine.generate_wav_bytes("Klick verification audio synthesis")
+        assert wav_bytes is not None, "Failed to generate WAV audio bytes"
+        assert len(wav_bytes) > 1000, f"WAV audio bytes payload too small ({len(wav_bytes)})"
+        assert wav_bytes[:4] == b"RIFF", "Generated audio header is not RIFF WAV"
+
+        # Verify base64 audio payload generation
+        wav_b64 = voice_tts_engine.generate_wav_base64("Klick verification audio base64")
+        assert wav_b64 is not None
+        assert len(wav_b64) > 1000
+
+        # Verify async live speech queue dispatch
+        spoken = voice_tts_engine.speak("Audit verification voice speech test", wait=False)
+        assert spoken is True
+
+        print(f"  [OK] Voice engine configured ({len(tts_status.available_voices)} voices), WAV synthesized ({len(wav_bytes)} bytes), speech dispatched")
+        audit_results["16_bidirectional_voice_tts"] = "PASSED"
+
+        # -----------------------------------------------------------------
+        # AUDIT 17: AUTOMATED PDF & DOCUMENT EXTRACTION ENGINE
+        # -----------------------------------------------------------------
+        print("\n[AUDIT 17/17] Testing Automated PDF & Document Extraction Engine...")
+        # 1. Test CSV parsing and table extraction
+        sample_csv = """Invoice_ID,Client_Name,Amount_Due,Issue_Date,Contact_Email
+INV-5001,Acme Corp,$12500.00,2026-10-14,accounts@acme.com
+INV-5002,Wayne Industries,$45000.50,2026-10-15,finance@wayne.com
+"""
+        csv_res = document_extractor.extract_document(sample_csv, filename="audit_invoices.csv")
+        assert csv_res.file_type == "csv"
+        assert len(csv_res.tables) == 1
+        assert csv_res.tables[0].row_count == 2
+        assert csv_res.tables[0].headers == ["Invoice_ID", "Client_Name", "Amount_Due", "Issue_Date", "Contact_Email"]
+        assert "INV-5001" in csv_res.entities.get("invoice_numbers", [])
+        assert any("12500" in a for a in csv_res.entities.get("currency_amounts", []))
+        assert any("acme.com" in e for e in csv_res.entities.get("emails", []))
+
+        # 2. Test PDF parsing with pypdf
+        from pypdf import PdfWriter
+        p_writer = PdfWriter()
+        p_writer.add_blank_page(width=612, height=792)
+        pdf_bytes_io = io.BytesIO()
+        p_writer.write(pdf_bytes_io)
+        pdf_res = document_extractor.extract_document(pdf_bytes_io.getvalue(), filename="audit_sample.pdf")
+        assert pdf_res.file_type == "pdf"
+        assert pdf_res.page_count == 1
+        assert pdf_res.filename == "audit_sample.pdf"
+
+        # 3. Test text entity extraction heuristics
+        text_invoice = """
+        TAX INVOICE
+        Invoice #: INV-88219
+        Date: 2026-10-14
+        Grand Total: $9,450.00
+        Billing Support: billing@klick.ai | (800) 555-0199
+        """
+        text_res = document_extractor.extract_document(text_invoice, filename="invoice_text.txt")
+        assert "INV-88219" in text_res.entities.get("invoice_numbers", [])
+        assert any("9,450" in a for a in text_res.entities.get("currency_amounts", []))
+        assert "billing@klick.ai" in text_res.entities.get("emails", [])
+
+        print("  [OK] CSV tables parsed, PDF extracted with pypdf, business entities (totals, invoices, emails) mapped")
+        audit_results["17_document_pdf_extraction"] = "PASSED"
+
     finally:
         await executor.close()
 
     print("\n" + "=" * 80)
-    print("AUDIT SUMMARY: ALL 13 IMPROVEMENTS VERIFIED")
+    print("AUDIT SUMMARY: ALL 17 IMPROVEMENTS VERIFIED")
     print("=" * 80)
     for k, status in sorted(audit_results.items()):
         print(f"  {k:35} : {status}")
 
     assert all(s == "PASSED" for s in audit_results.values()), "Some audit checks failed!"
-    print("\nALL AUDIT CHECKS PASSED PERFECTLY!\n")
+    print("\nALL 17 AUDIT CHECKS PASSED PERFECTLY!\n")
 
 
 if __name__ == "__main__":
     asyncio.run(run_full_audit())
+

@@ -669,4 +669,176 @@ class MacroReplayResult(BaseModel):
     agent_run_id: Optional[str] = None
 
 
+# =========================================================================
+# 5. SCHEDULED AUTOMATIONS & WINDOWS TOAST NOTIFICATIONS
+# =========================================================================
+
+class ScheduleType(str, Enum):
+    INTERVAL = "interval"
+    DAILY = "daily"
+    CRON = "cron"
+
+
+class ScheduledTask(BaseModel):
+    """Recurring scheduled automation task."""
+    id: str = Field(..., description="Unique task identifier")
+    name: str = Field(..., description="Human-readable name")
+    description: Optional[str] = Field(default="", description="Task description or goal")
+    schedule_type: ScheduleType = Field(default=ScheduleType.INTERVAL, description="Interval or daily schedule")
+    interval_seconds: int = Field(default=3600, ge=5, description="Interval in seconds between runs")
+    time_of_day: Optional[str] = Field(default=None, description="Time of day for daily schedule (HH:MM)")
+    task_type: str = Field(default="macro", description="'macro', 'goal', or 'url_check'")
+    payload: Dict[str, Any] = Field(default_factory=dict, description="Execution parameters or goal specification")
+    notify_on_complete: bool = Field(default=True, description="Send native Windows toast alert when run completes")
+    notify_on_change_only: bool = Field(default=False, description="Send toast alert only if content changed")
+    enabled: bool = Field(default=True, description="Whether the schedule is currently active")
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    last_run: Optional[str] = Field(default=None, description="ISO timestamp of last execution")
+    last_status: Optional[str] = Field(default=None, description="'success', 'failed', 'running'")
+    last_message: Optional[str] = Field(default=None, description="Outcome message of last run")
+    next_run: Optional[str] = Field(default=None, description="ISO timestamp of next scheduled execution")
+    run_count: int = Field(default=0, description="Total times executed")
+
+
+class ScheduleCreateRequest(BaseModel):
+    """Payload to register a new recurring scheduled automation."""
+    name: str = Field(..., description="Human-readable task name")
+    description: Optional[str] = Field(default="", description="Task description")
+    schedule_type: ScheduleType = Field(default=ScheduleType.INTERVAL)
+    interval_seconds: Optional[int] = Field(default=3600, ge=5)
+    time_of_day: Optional[str] = Field(default=None)
+    task_type: str = Field(default="macro", description="'macro', 'goal', or 'url_check'")
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    notify_on_complete: bool = Field(default=True)
+    notify_on_change_only: bool = Field(default=False)
+    enabled: bool = Field(default=True)
+
+
+class ScheduleUpdateRequest(BaseModel):
+    """Payload to update an existing scheduled automation."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    schedule_type: Optional[ScheduleType] = None
+    interval_seconds: Optional[int] = None
+    time_of_day: Optional[str] = None
+    task_type: Optional[str] = None
+    payload: Optional[Dict[str, Any]] = None
+    notify_on_complete: Optional[bool] = None
+    notify_on_change_only: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+class ToastNotificationRequest(BaseModel):
+    """Payload to dispatch a native Windows desktop toast alert."""
+    title: str = Field(default="Klick BrowserPilot Alert", description="Toast headline")
+    message: str = Field(..., description="Body text for desktop notification")
+    duration_seconds: Optional[int] = Field(default=5, description="Display duration")
+
+
+# =========================================================================
+# 6. VISUAL DIFF & WEBPAGE CHANGE MONITORING
+# =========================================================================
+
+class VisualDiffResult(BaseModel):
+    """Outcome of visual screenshot difference analysis."""
+    similarity_score: float = Field(..., description="Perceptual similarity score (1.0 = identical)")
+    change_percentage: float = Field(..., description="Percentage of viewport pixels changed (0.0 to 100.0)")
+    has_changed: bool = Field(..., description="Whether change exceeds detection threshold")
+    changed_regions_count: int = Field(default=0, description="Number of distinct changed bounding boxes")
+    changed_bounding_boxes: List[Dict[str, float]] = Field(
+        default_factory=list,
+        description="Bounding boxes [x, y, width, height] of detected visual changes"
+    )
+    diff_image_base64: Optional[str] = Field(
+        default=None,
+        description="Base64 encoded composite diff image with highlighted change regions"
+    )
+    baseline_id: Optional[str] = Field(default=None, description="Identifier of baseline screenshot")
+    url: Optional[str] = Field(default=None, description="URL of page observed")
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class VisualDiffRequest(BaseModel):
+    """Request to compute visual difference between two images."""
+    baseline_image_base64: str = Field(..., description="Baseline screenshot (base64 PNG/JPEG)")
+    current_image_base64: str = Field(..., description="Current screenshot (base64 PNG/JPEG)")
+    threshold: Optional[float] = Field(default=0.02, description="Change sensitivity threshold")
+
+
+class BaselineSaveRequest(BaseModel):
+    """Request to save a baseline screenshot for future visual change monitoring."""
+    baseline_id: str = Field(..., description="Unique key or URL identifier")
+    label: Optional[str] = Field(default=None, description="Human friendly label")
+    image_base64: Optional[str] = Field(default=None, description="Screenshot base64 (or captures current page)")
+    url: Optional[str] = Field(default=None, description="Associated URL")
+
+
+# =========================================================================
+# 7. BIDIRECTIONAL VOICE (TTS SPEECH SYNTHESIS)
+# =========================================================================
+
+class TTSRequest(BaseModel):
+    """Request for Klick to speak status aloud or synthesize audio."""
+    text: str = Field(..., description="Message to speak aloud")
+    voice_id: Optional[str] = Field(default=None, description="Optional voice identifier")
+    rate: Optional[int] = Field(default=175, description="Speaking speed in words per minute")
+    volume: Optional[float] = Field(default=1.0, ge=0.0, le=1.0, description="Speech volume")
+    wait: bool = Field(default=False, description="Whether to block until speech finishes")
+
+
+class TTSStatusResponse(BaseModel):
+    """Telemetry for voice speech synthesizer."""
+    enabled: bool = Field(default=True)
+    engine: str = Field(default="sapi5_windows")
+    available_voices: List[Dict[str, Any]] = Field(default_factory=list)
+    current_voice: Optional[str] = None
+    rate: int = 175
+    volume: float = 1.0
+
+
+class TTSSettingsRequest(BaseModel):
+    """Request to update voice synthesis configuration."""
+    enabled: Optional[bool] = None
+    voice_id: Optional[str] = None
+    rate: Optional[int] = None
+    volume: Optional[float] = None
+
+
+# =========================================================================
+# 8. AUTOMATED PDF & DOCUMENT EXTRACTION ENGINE
+# =========================================================================
+
+class ExtractedTable(BaseModel):
+    """Structured tabular data extracted from a document or PDF."""
+    headers: List[str] = Field(default_factory=list)
+    rows: List[List[str]] = Field(default_factory=list)
+    row_count: int = 0
+    column_count: int = 0
+
+
+class DocumentExtractionResult(BaseModel):
+    """Outcome of parsing a PDF, CSV, or document file."""
+    filename: str = Field(..., description="Name of parsed document file")
+    file_type: str = Field(default="pdf", description="Document format: pdf, csv, text, json")
+    page_count: int = Field(default=1, description="Total pages parsed")
+    total_characters: int = Field(default=0, description="Length of extracted raw text")
+    text_content: str = Field(default="", description="Full extracted plain text")
+    tables: List[ExtractedTable] = Field(default_factory=list, description="Extracted structured tables")
+    entities: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extracted key business entities: dates, totals, invoice numbers, emails"
+    )
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Document author, title, creation date")
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class DocumentParseRequest(BaseModel):
+    """Request to extract structured content from a document file."""
+    file_path: Optional[str] = Field(default=None, description="Path to file on server")
+    file_base64: Optional[str] = Field(default=None, description="Optional base64 encoded document content")
+    filename: Optional[str] = Field(default="document.pdf", description="Name of document")
+    extract_tables: bool = Field(default=True, description="Attempt table structure parsing")
+
+
+
 
