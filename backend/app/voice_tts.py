@@ -85,6 +85,17 @@ class VoiceTTSEngine:
         self._worker_thread = threading.Thread(target=self._speech_worker_loop, daemon=True)
         self._worker_thread.start()
 
+    @staticmethod
+    def _apply_sapi_config(sp: Any, voice_id: Optional[str], rate: int, volume: float) -> None:
+        """Apply target voice, scaled rate, and volume to a SAPI SpVoice instance."""
+        if voice_id:
+            for v in sp.GetVoices():
+                if v.Id == voice_id or voice_id in v.GetDescription():
+                    sp.Voice = v
+                    break
+        sp.Rate = max(-10, min(10, int((rate - 175) / 15)))
+        sp.Volume = int(max(0.0, min(1.0, volume)) * 100)
+
     def _speech_worker_loop(self):
         """Background worker loop fallback."""
         while not self._stop_event.is_set():
@@ -103,14 +114,7 @@ class VoiceTTSEngine:
                 import win32com.client
                 pythoncom.CoInitialize()
                 sp = win32com.client.Dispatch("SAPI.SpVoice")
-                if voice_id:
-                    for v in sp.GetVoices():
-                        if v.Id == voice_id:
-                            sp.Voice = v
-                            break
-                sapi_rate = max(-10, min(10, int((rate - 175) / 15)))
-                sp.Rate = sapi_rate
-                sp.Volume = int(max(0.0, min(1.0, volume)) * 100)
+                self._apply_sapi_config(sp, voice_id, rate, volume)
                 sp.Speak(text, 0)
                 pythoncom.CoUninitialize()
             except Exception as e:
@@ -140,14 +144,7 @@ class VoiceTTSEngine:
         try:
             import win32com.client
             sp = win32com.client.Dispatch("SAPI.SpVoice")
-            if target_voice:
-                for v in sp.GetVoices():
-                    if v.Id == target_voice or target_voice in v.GetDescription():
-                        sp.Voice = v
-                        break
-            sapi_rate = max(-10, min(10, int((target_rate - 175) / 15)))
-            sp.Rate = sapi_rate
-            sp.Volume = int(max(0.0, min(1.0, target_vol)) * 100)
+            self._apply_sapi_config(sp, target_voice, target_rate, target_vol)
             # SVSFlagsAsync = 1, SVSFDefault = 0
             flags = 0 if wait else 1
             sp.Speak(clean_text, flags)
@@ -184,14 +181,7 @@ class VoiceTTSEngine:
             import win32com.client
             sp = win32com.client.Dispatch("SAPI.SpVoice")
             fs = win32com.client.Dispatch("SAPI.SpFileStream")
-            if target_voice:
-                for v in sp.GetVoices():
-                    if v.Id == target_voice or target_voice in v.GetDescription():
-                        sp.Voice = v
-                        break
-            sapi_rate = max(-10, min(10, int((target_rate - 175) / 15)))
-            sp.Rate = sapi_rate
-            sp.Volume = int(max(0.0, min(1.0, target_vol)) * 100)
+            self._apply_sapi_config(sp, target_voice, target_rate, target_vol)
 
             fs.Open(str(tmp_path), 3)  # 3 = SSFMCreateForWrite
             sp.AudioOutputStream = fs

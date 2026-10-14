@@ -19,6 +19,12 @@ import os
 import uuid
 from typing import Optional
 
+from .agent_helpers import (
+    apply_smart_workflows,
+    extract_search_query,
+    infer_initial_url,
+    prevent_target_click_loop,
+)
 from .events import EventType, event_manager
 from .executor import PlaywrightExecutor
 from .model_client import OllamaModelClient
@@ -95,39 +101,7 @@ class AgentLoop:
             state.status = RunStatus.RUNNING
 
             # Initial navigation if requested or inferred from goal
-            target_url = request.start_url
-            goal_lower = request.goal.lower()
-
-            # Infer initial destination if start_url is omitted or is default mock URL but goal targets known public site
-            is_mock_default = not target_url or "localhost:8080" in target_url or "127.0.0.1:8080" in target_url
-            if is_mock_default:
-                # 1. Check for explicit domain or URL in goal (e.g. "monkeytype.com", "typingtest.com", "github.com", "https://...")
-                import re
-                domain_match = re.search(
-                    r'(https?://[^\s,]+|(?:[a-zA-Z0-9-]+\.)+(?:com|org|net|io|co|ai|edu|gov|dev|app|gg|in|me)[^\s,]*)',
-                    request.goal,
-                    re.IGNORECASE
-                )
-                if domain_match:
-                    found = domain_match.group(1).strip().rstrip(".,;\"'")
-                    if not found.startswith("http://") and not found.startswith("https://"):
-                        target_url = f"https://{found}"
-                    else:
-                        target_url = found
-                elif any(w in goal_lower for w in ("map", "maps", "route", "direction")):
-                    target_url = "https://www.google.com/maps"
-                elif "youtube" in goal_lower:
-                    target_url = "https://www.youtube.com"
-                elif "wikipedia" in goal_lower:
-                    target_url = "https://www.wikipedia.org"
-                elif "flipkart" in goal_lower:
-                    target_url = "https://www.flipkart.com"
-                elif "amazon" in goal_lower:
-                    target_url = "https://www.amazon.com"
-                elif any(k in goal_lower for k in ("invoice", "apexflow", "task", "inv-")):
-                    target_url = "http://127.0.0.1:8000/mock/tasks.html"
-                elif not target_url:
-                    target_url = "https://www.google.com"
+            target_url = infer_initial_url(request.goal, request.start_url)
 
             if target_url:
                 await self.executor.execute(
@@ -219,113 +193,15 @@ class AgentLoop:
                     max_steps=state.max_steps,
                 )
 
-                # Extract query term if goal involves searching
-                import re
-                query_match = re.search(r"(?:search|look\s+for|find|query)\s+(?:for\s+)?['\"]?([^'\"\n]+?)['\"]?(?:\s+and\b|\s+on\b|\s+in\b|$)", request.goal, re.IGNORECASE)
-                if not query_match:
-                    query_match = re.search(r"search (?:for )?['\"]?([^'\"\n]+?)['\"]?(?:\s+and\b|$)", request.goal, re.IGNORECASE)
-                query_term = query_match.group(1).strip() if query_match else ""
-                if query_term.lower().endswith(" on youtube"):
-                    query_term = query_term[:-11].strip()
-                elif query_term.lower().endswith(" in youtube"):
-                    query_term = query_term[:-11].strip()
-
-                # Ensure action has text if typing search query from goal
-                if response.action.action_type == ActionType.TYPE and not response.action.text and query_term:
-                    response.action.text = query_term
-
-                # Specialized Smart Workflow Handlers:
-                curr_p_url = (page.url or "").lower()
-
-                # A. YouTube Handler
-                if "youtube.com" in curr_p_url and "results" not in curr_p_url and "watch" not in curr_p_url and "shorts" not in curr_p_url and query_term:
-                    tgt = "id-search"
-                    sel = "[data-agent-id='id-search']"
-                    for el in observation.interactive_elements:
-                        el_desc = f"{el.id or ''} {el.text or ''} {el.aria_label or ''} {el.selector or ''}".lower()
-                        if el.tag_name in ("input", "textarea") and any(k in el_desc for k in ("search", "query")):
-                            tgt = el.id or "id-search"
-                            sel = el.selector or f"[data-agent-id='{tgt}']"
-                            break
-
-                    response.action.action_type = ActionType.TYPE
-                    response.action.target = tgt
-                    response.action.selector = sel
-                    response.action.text = query_term
-                    response.action.description = f"Type '{query_term}' into search input to search YouTube"
-
-                elif "youtube.com" in curr_p_url and "results" in curr_p_url:
-                    if any(w in goal_lower for w in ("video", "watch", "play", "first")):
-                        response.action.action_type = ActionType.CLICK
-                        response.action.target = "id-video-title"
-                        response.action.selector = "[data-agent-id='id-video-title']"
-                        response.action.description = "Click first video title link to open and play video"
-                    else:
-                        response.action.action_type = ActionType.FINISH
-                        response.action.description = f"Search for '{query_term or 'query'}' completed and results are displayed"
-
-                # B. Google / Search Engine Handler
-                elif ("google.com" in curr_p_url or "bing.com" in curr_p_url) and "/search" not in curr_p_url and query_term:
-                    tgt = None
-                    sel = "textarea[name='q'], input[name='q']"
-                    for el in observation.interactive_elements:
-                        el_desc = f"{el.id or ''} {el.text or ''} {el.aria_label or ''} {el.selector or ''}".lower()
-                        if el.tag_name in ("input", "textarea") and any(k in el_desc for k in ("search", "query", "q")):
-                            tgt = el.id
-                            sel = el.selector or f"[data-agent-id='{tgt}']"
-                            break
-                    response.action.action_type = ActionType.TYPE
-                    response.action.target = tgt or "id-search"
-                    response.action.selector = sel
-                    response.action.text = query_term
-                    response.action.description = f"Type '{query_term}' into search box"
-
-                elif ("google.com" in curr_p_url or "bing.com" in curr_p_url) and "/search" in curr_p_url:
-                    if any(w in goal_lower for w in ("open", "website", "test", "first", "link", "click")):
-                        # Click first organic search result
-                        result_tgt = None
-                        for el in observation.interactive_elements:
-                            if el.tag_name == "a" and el.text and len(el.text.strip()) > 3:
-                                el_txt = el.text.lower()
-                                if not any(skip in el_txt for skip in ("tools", "all", "images", "videos", "news", "sign in", "settings", "feedback")):
-                                    result_tgt = el.id
-                                    break
-                        if result_tgt:
-                            response.action.action_type = ActionType.CLICK
-                            response.action.target = result_tgt
-                            response.action.selector = f"[data-agent-id='{result_tgt}']"
-                            response.action.description = f"Click search result link '{result_tgt}' to open website"
-                    else:
-                        response.action.action_type = ActionType.FINISH
-                        response.action.description = f"Search for '{query_term}' completed successfully"
-
-                # C. Typing Test & Monkeytype Handler
-                elif any(tt in curr_p_url for tt in ("monkeytype.com", "typingtest.com", "10fastfingers.com", "typing.com")):
-                    if any(w in goal_lower for w in ("type", "typing", "words", "test")):
-                        snippet = observation.page_text_snippet or ""
-                        extracted_words = "the quick brown fox jumps over the lazy dog and types with speed"
-                        if snippet:
-                            word_candidates = [w for w in re.findall(r'\b[a-z]{2,10}\b', snippet.lower()) if w not in ("monkeytype", "cookies", "privacy", "leaderboard", "settings", "about", "restart", "test")]
-                            if len(word_candidates) >= 5:
-                                extracted_words = " ".join(word_candidates[:12])
-
-                        response.action.action_type = ActionType.TYPE
-                        response.action.target = "words"
-                        response.action.selector = "#wordsInput, #words, .word, input[type='text'], body"
-                        response.action.text = extracted_words
-                        response.action.description = f"Start typing test words: '{extracted_words[:35]}...'"
-
-                # D. Convert Click on Input to Type
-                elif response.action.action_type == ActionType.CLICK and query_term:
-                    is_input = False
-                    for el in observation.interactive_elements:
-                        if el.id == response.action.target and el.tag_name in ("input", "textarea"):
-                            is_input = True
-                            break
-                    if is_input:
-                        response.action.action_type = ActionType.TYPE
-                        response.action.text = query_term
-                        response.action.description = f"Type '{query_term}' into '{response.action.target}'"
+                # Extract query term & apply smart workflows (YouTube, Search, Typing Tests)
+                query_term = extract_search_query(request.goal)
+                apply_smart_workflows(
+                    response.action,
+                    request.goal,
+                    page.url or "",
+                    observation,
+                    query_term,
+                )
 
                 # Check cyclic stagnation
                 action_sig = f"{response.action.action_type.value}|{response.action.target}|{response.action.text}"
@@ -387,32 +263,13 @@ class AgentLoop:
                             continue
 
                 # Target click loop protection (prevent clicking the same element 3+ times on same URL)
-                if not hasattr(state, "_target_clicks"):
-                    state._target_clicks = {}
-                if response.action.target and response.action.action_type == ActionType.CLICK:
-                    tgt_key = f"{curr_url}::{response.action.target}"
-                    state._target_clicks[tgt_key] = state._target_clicks.get(tgt_key, 0) + 1
-                    if state._target_clicks[tgt_key] >= 3:
-                        logger.warning(f"Target '{response.action.target}' clicked {state._target_clicks[tgt_key]} times without URL advance. Diverting action.")
-                        is_input = any((el.id == response.action.target or getattr(el, 'agent_id', None) == response.action.target) and el.tag_name in ("input", "textarea") for el in observation.interactive_elements)
-                        if is_input and query_term:
-                            response.action.action_type = ActionType.TYPE
-                            response.action.text = query_term
-                            response.action.description = f"Repetitive click diverted: typing '{query_term}' into input"
-                        else:
-                            alt_elem = None
-                            for el in observation.interactive_elements:
-                                if el.id != response.action.target and getattr(el, 'agent_id', None) != response.action.target and el.tag_name in ("a", "button"):
-                                    alt_elem = el.id
-                                    break
-                            if alt_elem:
-                                response.action.target = alt_elem
-                                response.action.selector = f"[data-agent-id='{alt_elem}']"
-                                response.action.description = f"Repetitive click diverted: clicking alternate element '{alt_elem}'"
-                            else:
-                                response.action.action_type = ActionType.SCROLL
-                                response.action.scroll_delta_y = 500
-                                response.action.description = "Repetitive click diverted: scrolling page down"
+                prevent_target_click_loop(
+                    response.action,
+                    state,
+                    curr_url,
+                    observation,
+                    query_term,
+                )
 
                 # D. Safety check on proposed action
                 safety_check = self.safety.evaluate_action(response.action, observation)

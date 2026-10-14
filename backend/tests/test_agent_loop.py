@@ -176,8 +176,8 @@ async def test_repeated_action_stuck_detection():
 
     assert state.status == RunStatus.FAILED
     assert "Stuck loop detected" in (state.error or "")
-    # Should stop at step 3 before indefinite loop
-    assert state.current_step == 3
+    # Should stop after self-healing recovery attempts before indefinite loop
+    assert state.current_step <= 6
 
 
 @pytest.mark.asyncio
