@@ -462,6 +462,10 @@ class BackendClient:
         except Exception:
             return []
 
+    def list_personas(self) -> List[Dict[str, Any]]:
+        """Alias for get_personas."""
+        return self.get_personas()
+
     def get_persona(self, persona_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve single persona profile."""
         try:

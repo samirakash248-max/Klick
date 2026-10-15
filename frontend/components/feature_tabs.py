@@ -30,8 +30,38 @@ def render_persona_tab(backend_client: Any) -> None:
     st.subheader("Persona Vault & Smart Form Auto-Filler")
     st.caption("Manage saved user personas and securely autofill web forms, checkout flows, and test data.")
 
-    personas = backend_client.list_personas()
+    if hasattr(backend_client, "get_personas"):
+        personas = backend_client.get_personas()
+    elif hasattr(backend_client, "list_personas"):
+        personas = backend_client.list_personas()
+    else:
+        personas = []
 
+    # 1. Quick Autofill Trigger Bar
+    with st.container():
+        st.markdown("**1-Click Page Autofill**")
+        col_p1, col_p2 = st.columns([3, 1])
+        with col_p1:
+            persona_options = {p.get("id"): f"{p.get('name', 'Persona')} ({p.get('email', 'No email')})" for p in personas} if personas else {}
+            sel_pid = st.selectbox(
+                "Active Persona for Autofill",
+                options=list(persona_options.keys()) if persona_options else ["default"],
+                format_func=lambda x: persona_options.get(x, x),
+                key="tab_persona_autofill_select",
+                label_visibility="collapsed",
+            ) if persona_options else None
+        with col_p2:
+            if st.button("⚡ Autofill Active Page", key="tab_persona_autofill_btn", type="primary", use_container_width=True):
+                with st.spinner("Analyzing form fields and autofilling..."):
+                    af_res = backend_client.autofill_persona(persona_id=sel_pid)
+                if af_res.get("success"):
+                    st.success(af_res.get("message", "Form fields autofilled successfully!"))
+                else:
+                    st.warning(f"Autofill notice: {af_res.get('error') or af_res.get('message', 'No form inputs found')}")
+
+    st.divider()
+
+    # 2. Persona Profiles Browser & Details
     col_p1, col_p2 = st.columns([1, 1])
 
     with col_p1:

@@ -95,6 +95,9 @@ class AgentLoop:
             run_id=run_id,
         )
 
+        goal_lower = (request.goal or "").lower()
+        query_term = extract_search_query(request.goal)
+
         try:
             # 1. Initialize browser
             page = await self.executor.initialize()
